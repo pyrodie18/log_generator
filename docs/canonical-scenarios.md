@@ -17,7 +17,6 @@ Both scenarios use the `linux-mini-lab` environment template and must reference 
 | Environment ID | `linux-mini-lab` |
 | Environment Version | `0.1` |
 | Time Zone | UTC |
-| Default Seed | `424242` |
 
 All authored timestamps are timezone-aware UTC timestamps. Relative offsets are measured from each scenario's
 `start_time`.
@@ -365,6 +364,8 @@ display_name: Benign Internal Web Browsing
 environment: linux-mini-lab
 seed: 1001
 start_time: 2026-01-15T14:00:00Z
+output_families:
+  - generic-normalized
 events:
   - id: evt-benign-web-003
     type: web_request
@@ -385,6 +386,8 @@ display_name: Local Account Misuse and Suspicious Web Access
 environment: linux-mini-lab
 seed: 2002
 start_time: 2026-01-15T03:12:00Z
+output_families:
+  - generic-normalized
 events:
   - id: evt-misuse-web-001
     type: linux_local_login

@@ -327,13 +327,13 @@ Examples of ordering constraints:
 - Firewall allow record aligns with the same flow represented in Zeek `conn.log`.
 - Domain controller authentication events align with workstation logon events.
 
-Randomness should be deterministic. Use a top-level seed and scoped random streams, for example:
+Randomness should be deterministic. The scenario seed is the only user-authored seed and should be split into scoped
+random streams internally, for example:
 
 ```text
-seed/environment
-seed/scenario/<scenario_id>
-seed/noise/<profile_id>
-seed/plugin/<plugin_name>/<event_id>
+rng/scenario/<scenario_id>
+rng/noise/<profile_id>
+rng/plugin/<plugin_name>/<event_id>
 ```
 
 This reduces accidental churn when new plugins or events are added.
@@ -424,9 +424,9 @@ JSON can be supported later as an intermediate machine-readable representation, 
 ### Benign Python Example
 
 ```python
-env = Environment.from_template("linux-mini-lab", seed=42)
+env = Environment.from_template("linux-mini-lab")
 
-scenario = Scenario("benign-web")
+scenario = Scenario("benign-web", seed=42)
 scenario.user("alice").on("linux-ws-01").browses("http://web-server-01.internal/")
 
 run = GeneratorRun(
@@ -440,9 +440,9 @@ run = GeneratorRun(
 ### Attack Python Example
 
 ```python
-env = Environment.from_template("linux-mini-lab", seed=42)
+env = Environment.from_template("linux-mini-lab")
 
-attack = AttackChain("local-account-misuse")
+attack = AttackChain("local-account-misuse", seed=42)
 attack.step("credential-use").linux_local_login(
     user="alice",
     host="linux-ws-01",
@@ -470,7 +470,7 @@ environment: linux-mini-lab
 time_range:
   start: "2026-06-27T09:00:00Z"
   end: "2026-06-27T10:00:00Z"
-sources:
+output_families:
   - zeek
   - apache
   - auditd
@@ -489,7 +489,7 @@ events:
 name: local-account-misuse
 seed: 1337
 environment: linux-mini-lab
-sources:
+output_families:
   - zeek
   - apache
   - auditd

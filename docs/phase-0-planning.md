@@ -44,7 +44,7 @@ The first useful implementation target after Phase 0 is:
 
 1. Load or construct the `linux-mini-lab` environment.
 2. Create source-neutral events for a benign web scenario and a local account misuse scenario.
-3. Preserve deterministic event IDs, correlation IDs, and timestamps from a seed.
+3. Preserve deterministic event IDs, correlation IDs, and timestamps from the scenario seed.
 4. Emit generic JSON Lines for the normalized events.
 5. Leave source-specific Zeek, Apache, and auditd generation for later phases.
 
@@ -176,7 +176,7 @@ Required planning tasks:
 
 - Give each scenario a stable ID and display name.
 - Define timestamps as absolute values or relative offsets from scenario start.
-- Define deterministic seed expectations.
+- Define deterministic scenario seed expectations.
 - Define expected parent-child event relationships.
 - Define expected correlation behavior across events.
 - Define expected validation checks.
@@ -199,7 +199,7 @@ Objective: define an author-friendly scenario format that maps cleanly to source
 
 Required planning tasks:
 
-- Define top-level fields such as `name`, `seed`, `environment`, `time_range`, `sources`, `events`, and
+- Define top-level fields such as `name`, `seed`, `environment`, `time_range`, `output_families`, `events`, and
   `attack_chain`.
 - Define timestamp syntax for absolute timestamps and relative offsets.
 - Define event references for dependencies, such as `after` and `delay`.
@@ -373,6 +373,6 @@ Expected Phase 1 starting tasks:
 - Create source-neutral entity models for hosts, users, services, networks, and log sources.
 - Create the `linux-mini-lab` fixture or template from the Phase 0 environment document.
 - Create event envelope and event type models from the taxonomy draft.
-- Add deterministic ID, seed, and correlation helpers.
+- Add deterministic ID, scenario seed, and correlation helpers.
 - Add semantic validation for unknown users, unknown hosts, invalid local logins, and impossible service references.
 - Add tests for the two canonical scenarios at the source-neutral event level.

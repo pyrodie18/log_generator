@@ -29,7 +29,6 @@ The template should support the first canonical scenarios:
 | Version | `0.1` |
 | Primary Domain | `internal` |
 | Time Zone | UTC |
-| Default Seed | `424242` |
 | Environment Type | Small internal lab |
 
 All internally generated timestamps should use timezone-aware UTC datetimes. Source-specific generators may render
@@ -320,7 +319,6 @@ version: "0.1"
 display_name: Linux Mini Lab
 domain: internal
 timezone: UTC
-default_seed: 424242
 zones:
   - id: workstation-vlan
     cidr: 10.10.10.0/24
