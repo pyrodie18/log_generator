@@ -27,7 +27,10 @@ Statistically realistic generation should be designed for but not required in th
 - SIEM ingestion configuration is out of scope. The project only needs to produce understandable directory structures,
   source-native or structured files, and metadata that downstream tooling can map into its own ingestion model.
 - Output logs should be grouped by generating source first, then by log family and stream. The directory path should make the source identifiable without reading a metadata file.
-- First built-in example environment: `linux-mini-lab`, with two Linux workstations, one Linux Apache web server on a separate internal VLAN, and one Zeek sensor passively viewing traffic between all hosts. Authentication uses local Linux accounts only; LDAP, Active Directory, and other centralized identity providers are out of scope for the first template.
+- First built-in example environment: `linux-mini-lab`, with two Linux workstations, one Linux Apache web server, one
+  DNS resolver, one Zeek sensor, and one boundary firewall across workstation, server, monitoring, and internet zones.
+  Authentication uses local Linux accounts only; LDAP, Active Directory, and other centralized identity providers are
+  out of scope for the first template.
 - The generator should write an optional answer-key file at `output/metadata/ground-truth.jsonl` for demos, training, and CTF-style exercises.
 - The generator should write a dataset manifest at `output/manifest.json` that inventories generated files and records
   human-readable parsing hints without generating SIEM configuration.
@@ -78,7 +81,8 @@ Common fields:
 
 ### Host
 
-A `Host` represents a workstation, server, domain controller, firewall, proxy, router, cloud resource, attacker system, or other device.
+A `Host` represents an endpoint or compute resource such as a workstation, server, domain controller, cloud resource,
+attacker system, or application host.
 
 Important fields:
 
@@ -90,6 +94,20 @@ Important fields:
 - Roles.
 - Installed applications.
 - Running services.
+- Logging coverage.
+
+### Network Device
+
+A `NetworkDevice` represents routed or inspected connectivity between zones, such as a firewall, router, proxy, or
+other network appliance.
+
+Important fields:
+
+- Device ID.
+- Device type.
+- Interfaces, each with a zone and IP address.
+- Policy rules for allowed or denied traffic.
+- NAT behavior.
 - Logging coverage.
 
 ### User
@@ -271,10 +289,10 @@ Recommended common fields:
 - `severity`: informational, low, medium, high, critical.
 - `actor`: person, process, account, or attacker identity responsible for the activity.
 - `user`: user account involved.
-- `src_host`: source host.
-- `dest_host`: destination host.
-- `src_ip`: source IP.
-- `dest_ip`: destination IP.
+- `source_host`: source host.
+- `destination_host`: destination host.
+- `source_ip`: source IP.
+- `destination_ip`: destination IP.
 - `domain`: DNS, Windows, cloud, or identity domain.
 - `protocol`: protocol such as DNS, HTTP, HTTPS, SMB, Kerberos, SSH, or LDAP.
 - `port`: destination port.
@@ -432,7 +450,7 @@ scenario.user("alice").on("linux-ws-01").browses("http://web-server-01.internal/
 run = GeneratorRun(
     environment=env,
     scenario=scenario,
-    sources=["zeek", "apache", "auditd"],
+    output_families=["zeek", "apache", "auditd", "firewall"],
     output=DirectoryOutput("./output"),
 )
 ```
@@ -450,12 +468,12 @@ attack.step("credential-use").linux_local_login(
 )
 attack.step("internal-web-access").web_request(
     user="alice",
-    src_host="linux-ws-01",
+    source_host="linux-ws-01",
     service="svc-web-http",
     path="/admin",
 )
 attack.step("suspicious-admin-download").web_request(
-    src_host="linux-ws-01",
+    source_host="linux-ws-01",
     service="svc-web-http",
     path="/admin/archive.tar.gz",
 )
@@ -464,9 +482,13 @@ attack.step("suspicious-admin-download").web_request(
 ### Benign YAML Example
 
 ```yaml
-name: benign-web
+schema_version: scenario/v0.1
+id: benign-web
+name: Benign Web
 seed: 42
-environment: linux-mini-lab
+environment:
+  id: linux-mini-lab
+  version: "0.1"
 time_range:
   start: "2026-06-27T09:00:00Z"
   end: "2026-06-27T10:00:00Z"
@@ -474,86 +496,100 @@ output_families:
   - zeek
   - apache
   - auditd
+  - firewall
 events:
-  - type: web_request
+  - id: evt-benign-web-001
+    type: web_request
     at: "+5m"
-    user: alice
-    src_host: linux-ws-01
+    actor: user-alice
+    source_host: linux-ws-01
     service: svc-web-http
+    method: GET
     path: /
 ```
 
 ### Attack YAML Example
 
 ```yaml
-name: local-account-misuse
+schema_version: scenario/v0.1
+id: local-account-misuse
+name: Local Account Misuse
 seed: 1337
-environment: linux-mini-lab
+environment:
+  id: linux-mini-lab
+  version: "0.1"
+time_range:
+  start: "2026-06-27T09:15:00Z"
+  end: "2026-06-27T09:30:00Z"
 output_families:
   - zeek
   - apache
   - auditd
+  - firewall
+events:
+  - id: credential-use
+    type: linux_local_login
+    at: "2026-06-27T09:15:00Z"
+    actor: user-alice
+    target_host: linux-ws-01
+    login_method: local_console
+    status: success
+  - id: internal-web-access
+    type: web_request
+    after: credential-use
+    delay: "3m"
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /admin
+  - id: suspicious-admin-download
+    type: web_request
+    after: internal-web-access
+    delay: "8m"
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /admin/archive.tar.gz
+    attack:
+      technique_id: T1105
+      technique_name: Ingress Tool Transfer
 attack_chain:
-  id: attack-001
-  name: Local Account Misuse
-  steps:
-    - id: credential-use
-      type: linux_local_login
-      at: "2026-06-27T09:15:00Z"
-      user: alice
-      host: linux-ws-01
-      success: true
-      attack:
-        tactic: credential-access
-    - id: internal-web-access
-      type: web_request
-      after: credential-use
-      delay: "3m"
-      user: alice
-      src_host: linux-ws-01
-      service: svc-web-http
-      path: /admin
-    - id: suspicious-admin-download
-      type: web_request
-      after: internal-web-access
-      delay: "8m"
-      src_host: linux-ws-01
-      service: svc-web-http
-      path: /admin/archive.tar.gz
-      attack:
-        tactic: collection
+  - id: step-download
+    name: Archive download
+    primary_event_id: suspicious-admin-download
+    technique_id: T1105
+    technique_name: Ingress Tool Transfer
 ```
 
 ### Noise YAML Example
 
 ```yaml
-name: office-background
+schema_version: scenario/v0.1
+id: office-background
+name: Office Background
 seed: 9001
-environment: linux-mini-lab
+environment:
+  id: linux-mini-lab
+  version: "0.1"
 time_range:
   start: "2026-06-27T08:00:00Z"
   end: "2026-06-27T18:00:00Z"
-noise:
-  volume: 5000
-  time_profile: business_hours
-  burstiness: medium
-  mix:
-    web_browsing: 55
-    dns_lookup: 20
-    linux_local_login: 10
-    web_request: 10
-    failed_local_login: 5
-  constraints:
-    preserve_user_working_hours: true
-    preserve_host_roles: true
-    avoid_impossible_auth: true
+events: []
+noise_profiles:
+  - id: light-business-hours-web
+    time_profile: business_hours
+    actor_pool:
+      - user-bob
+      - user-carol
 ```
 
 ## First Environment Template
 
 The first built-in environment should be intentionally small and Linux-only. This keeps the initial implementation
-focused while still exercising host identity, users, network segmentation, local authentication, Apache web logs,
-auditd logs, and Zeek network visibility.
+focused while still exercising host identity, users, network segmentation, network device policy, local authentication,
+Apache web logs, auditd logs, Zeek network visibility, and derived firewall telemetry.
 
 Template name: `linux-mini-lab`
 
@@ -562,13 +598,22 @@ Hosts:
 - `linux-ws-01`: Linux workstation on the workstation VLAN, with local users `alice` and `bob`.
 - `linux-ws-02`: Linux workstation on the workstation VLAN, with local user `carol`.
 - `web-server-01`: Linux web server on a separate internal server VLAN, running Apache.
-- `zeek-sensor-01`: Zeek sensor passively observing traffic between all lab hosts.
+- `lab-dns-01`: Linux DNS resolver on the server VLAN.
+- `zeek-sensor-01`: Zeek sensor passively observing workstation and server VLAN traffic.
+
+Network devices:
+
+- `boundary-fw-01`: Boundary firewall with interfaces in the workstation VLAN, server VLAN, and external internet zone.
 
 Network layout:
 
 - Workstation VLAN: contains `linux-ws-01` and `linux-ws-02`.
-- Server VLAN: contains `web-server-01`.
-- Sensor visibility: `zeek-sensor-01` sees all traffic between the two workstation hosts and the web server.
+- Server VLAN: contains `web-server-01` and `lab-dns-01`.
+- Monitoring VLAN: contains `zeek-sensor-01`.
+- Internet: external zone reached through `boundary-fw-01`.
+- Sensor visibility: `zeek-sensor-01` sees workstation-to-server and server-to-workstation traffic.
+- Firewall policy: `boundary-fw-01` allows workstation DNS and HTTP flows to the server VLAN and web traffic to the
+  internet; denied traffic can still produce firewall telemetry when the matching policy rule logs.
 
 Authentication model:
 
@@ -582,6 +627,7 @@ Initial log families:
 - `linux-ws-02/auditd`: Local Linux authentication and process-relevant audit records.
 - `web-server-01/apache`: Apache access and error logs.
 - `web-server-01/auditd`: Local Linux authentication and process-relevant audit records on the web server.
+- `boundary-fw-01/firewall`: Firewall allow and deny traffic records.
 
 ## Noise Generation Design
 
@@ -657,8 +703,8 @@ and metadata into its own ingestion model.
 
 The output path should identify the generating source directly. A generating source is the system, device, sensor, or
 service instance that would have written the log in a real environment. For example, `zeek-sensor-01` may only contain
-Zeek logs, while `web-server-01` may contain Apache, auditd, and application logs. The manifest can add detail, but it
-must not be required to determine which source generated a file.
+Zeek logs, `web-server-01` may contain Apache, auditd, and application logs, and `boundary-fw-01` may contain firewall
+logs. The manifest can add detail, but it must not be required to determine which source generated a file.
 
 Recommended path contract:
 
@@ -669,7 +715,7 @@ output/logs/<generating_source_id>/<log_family>/<log_stream>
 Where:
 
 - `generating_source_id` is a stable, filesystem-safe source identifier such as `zeek-sensor-01`, `web-server-01`,
-  `linux-ws-01`, or `linux-ws-02`.
+  `linux-ws-01`, `linux-ws-02`, or `boundary-fw-01`.
 - `log_family` is the source family or subsystem, such as `zeek`, `windows`, `apache`, `auditd`, `firewall`, or
   `proxy`.
 - `log_stream` is the concrete stream or file, such as `conn.log`, `security.jsonl`, `access.log`, or `audit.log`.

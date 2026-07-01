@@ -5,9 +5,9 @@
 This document defines the first author-facing YAML scenario format for the synthetic log generator. The format is
 designed for the `linux-mini-lab` environment, the source-neutral event taxonomy, and the two canonical MVP scenarios.
 
-The schema should let authors describe meaningful activity without embedding Zeek, Apache, auditd, or SIEM-specific
-fields. Source-specific records are derived later from source-neutral events, the environment template, and generator
-configuration.
+The schema should let authors describe meaningful activity without embedding Zeek, Apache, auditd, firewall, or
+SIEM-specific fields. Source-specific records are derived later from source-neutral events, the environment template,
+and generator configuration.
 
 ## Design Goals
 
@@ -109,15 +109,16 @@ output_families:
 ```
 
 `generic-normalized` is always available because it is emitted from expanded source-neutral events. Source-specific
-families such as `zeek`, `apache`, and `auditd` are generated only when all of these are true:
+families such as `zeek`, `apache`, `auditd`, and `firewall` are generated only when all of these are true:
 
 - The scenario requests the family in `output_families`.
-- The environment has a host or sensor with a matching `logging_profiles` family.
+- The environment has a host, sensor, or network device with a matching `logging_profiles` family.
 - The event type, target service, and visibility rules support that family.
 
 For example, requesting `apache` does not create Apache output for every web request. The request must target a service
 hosted by an environment host with an Apache-capable logging profile, such as `svc-web-http` on `web-server-01`.
 Requesting `zeek` requires a sensor profile and visibility into the relevant traffic path.
+Requesting `firewall` requires a network device on the computed path with a logged matching policy rule.
 
 ## Event Shape
 
@@ -527,6 +528,7 @@ actionable reason.
 - A generated DNS lookup for a known internal service must resolve through environment DNS records.
 - A generated network connection must use the service target host, IP address, port, and protocol.
 - Sensor visibility should be checked before future source-specific Zeek records are expected.
+- Firewall policy should be checked before future source-specific firewall records are expected.
 - Download classification should be derived from `web_request.path` and should not require a separate event type.
 
 ## Error Message Expectations

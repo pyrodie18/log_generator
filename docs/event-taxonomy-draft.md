@@ -33,9 +33,12 @@ strictly scenario-driven.
 
 - `apache_request` is not authored as a source-neutral event.
 - `file_download` is not authored as a separate source-neutral event.
+- `firewall_traffic` is not authored as a source-neutral event.
 
 Apache, nginx, or other web-server records are generated from `web_request` events by inspecting the target service.
 Download behavior is inferred from a single `web_request` path.
+Firewall records are generated from `network_connection` events by inspecting the computed network path, network device
+policy, and requested output families.
 
 ## Authoring and Expansion Model
 
@@ -49,6 +52,8 @@ Expansion can create helper events when the environment has enough information:
 - A `web_request` to an internal service can expand into a DNS lookup, a network connection, and the web request.
 - A `web_request` after an existing compatible connection can reuse that connection instead of creating another one.
 - A local login can be the parent of the first helper event in a suspicious activity chain.
+- Firewall telemetry can be derived from generated or authored `network_connection` events when the computed path
+  crosses a logged firewall policy rule.
 
 Authors may still create `dns_lookup` or `network_connection` events manually when the scenario needs precise low-level
 behavior, unusual timing, failed helper activity, or a direct test of those event types.
@@ -172,6 +177,7 @@ Examples:
 - Apache byte counts
 - Apache combined-log user agent text
 - auditd serial numbers
+- Firewall policy names, rule numbers, action strings, and NAT renderings
 - source-native timestamp strings
 - synthetic packet or byte counters
 

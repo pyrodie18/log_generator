@@ -17,7 +17,7 @@ The template should support the first canonical scenarios:
 - Use stable IDs, IP addresses, hostnames, and service names so tests can assert exact values.
 - Make every valid scenario reference resolvable through the environment.
 - Make impossible activity easy to reject during validation.
-- Provide enough network and service detail for future Zeek, Apache, and auditd generators.
+- Provide enough network, service, and policy detail for future Zeek, Apache, auditd, and firewall generators.
 - Keep downstream ingestion concerns outside the template. Directory structure and metadata should be clear to humans.
 
 ## Template Identity
@@ -39,10 +39,13 @@ timestamps in a source-native format, but the environment itself should not carr
 | Zone ID | Display Name | CIDR | Hosts | Purpose |
 | --- | --- | --- | --- | --- |
 | `workstation-vlan` | Workstation VLAN | `10.10.10.0/24` | `linux-ws-01`, `linux-ws-02` | Linux user workstations. |
-| `server-vlan` | Server VLAN | `10.10.20.0/24` | `web-server-01`, `lab-dns-01`, `lab-gateway-01` | Internal application and infrastructure services. |
+| `server-vlan` | Server VLAN | `10.10.20.0/24` | `web-server-01`, `lab-dns-01` | Internal application and infrastructure services. |
 | `monitoring-vlan` | Monitoring VLAN | `10.10.30.0/24` | `zeek-sensor-01` | Sensor management and monitoring interfaces. |
+| `internet` | Internet | external | none | External resources outside the lab boundary. |
 
-The MVP scenarios should only use `workstation-vlan`, `server-vlan`, and `monitoring-vlan`. The
+The MVP scenarios should only require `workstation-vlan`, `server-vlan`, and `monitoring-vlan`, but the template also
+defines an external `internet` zone so later scenarios can model boundary firewall traversal without changing the
+topology model.
 
 ## Hosts
 
@@ -52,7 +55,6 @@ The MVP scenarios should only use `workstation-vlan`, `server-vlan`, and `monito
 | `linux-ws-02` | `linux-ws-02` | `linux-ws-02.internal` | workstation | `workstation-vlan` | `10.10.10.12` | Ubuntu Linux | `profile-auditd-only` |
 | `web-server-01` | `web-server-01` | `web-server-01.internal` | web server | `server-vlan` | `10.10.20.21` | Ubuntu Linux | `profile-apache-auditd` |
 | `lab-dns-01` | `lab-dns-01` | `lab-dns-01.internal` | DNS resolver | `server-vlan` | `10.10.20.53` | Ubuntu Linux | none |
-| `lab-gateway-01` | `lab-gateway-01` | `lab-gateway-01.internal` | gateway | `server-vlan` | `10.10.20.1` | Linux network appliance | none |
 | `zeek-sensor-01` | `zeek-sensor-01` | `zeek-sensor-01.internal` | passive sensor | `monitoring-vlan` | `10.10.30.31` | Zeek sensor | `profile-zeek-only` |
 
 ### Host Notes
@@ -62,9 +64,10 @@ The MVP scenarios should only use `workstation-vlan`, `server-vlan`, and `monito
 - `web-server-01` hosts the internal Apache service used by the first scenarios.
 - `lab-dns-01` is a normal host with no MVP logging profile attached. A future DNS logging profile can enable DNS
   server-side records without changing the entity model.
-- `lab-gateway-01` is a placeholder host for future routing behavior and does not generate logs in the MVP.
 - `zeek-sensor-01` has a management IP in `monitoring-vlan` and passive visibility into traffic between the
   workstation and server VLANs.
+- `boundary-fw-01` is modeled under network devices rather than hosts because its interfaces and policy rules drive
+  path selection and firewall telemetry.
 
 Hosts without logging profiles are still part of the environment. They can own services, appear in DNS, participate in
 network activity, and become visible to sensors, but they do not produce their own host-side log files.
@@ -131,7 +134,6 @@ model an error condition or access-control edge case. In the structured template
 | `web-server-01.internal` | A | `10.10.20.21` | Used by web scenarios. |
 | `zeek-sensor-01.internal` | A | `10.10.30.31` | Sensor management identity. |
 | `lab-dns-01.internal` | A | `10.10.20.53` | Internal resolver identity. |
-| `lab-gateway-01.internal` | A | `10.10.20.1` | Gateway placeholder identity. |
 
 DNS lookups in MVP scenarios should query `lab-dns-01` and should be visible to `zeek-sensor-01`.
 
@@ -141,14 +143,47 @@ Logging profiles are reusable telemetry bundles. A profile defines one or more l
 attaches one or more profiles, and the effective generated files are derived from the host ID plus the attached
 profile's families and streams.
 
-| Profile ID | Families and Streams | Attached Hosts | Purpose |
+| Profile ID | Families and Streams | Attached Entities | Purpose |
 | --- | --- | --- | --- |
 | `profile-zeek-only` | `zeek`: `conn.log`, `dns.log`, `http.log`| `zeek-sensor-01` | Passive network telemetry. |
 | `profile-auditd-only` | `auditd`: `audit.log` | `linux-ws-01`, `linux-ws-02` | Local authentication and process telemetry. |
 | `profile-apache-auditd` | `apache`: `access.log`, `error.log`; `auditd`: `audit.log` | `web-server-01` | Web access, server errors, and host telemetry. |
+| `profile-firewall-traffic` | `firewall`: `traffic.log` | `boundary-fw-01` | Firewall allow and deny telemetry. |
 
-The attached hosts column is an explanatory inverse view. In the structured template, the source of truth is each
-host's `logging_profiles` list.
+The attached entities column is an explanatory inverse view. In the structured template, the source of truth is each
+host's or network device's `logging_profiles` list.
+
+## Network Devices and Policy
+
+Network devices describe routed connectivity between zones. Scenarios should not author firewall events directly.
+Instead, an authored event such as `web_request` or `network_connection` should resolve to a source zone and
+destination zone. If the selected path crosses a network device with matching policy and logging enabled, the matching
+firewall records can be generated from that derived path.
+
+### Network Device Inventory
+
+| Device ID | Type | Interfaces | Logging Profiles | Purpose |
+| --- | --- | --- | --- | --- |
+| `boundary-fw-01` | firewall | `workstation-vlan` `10.10.10.1`; `server-vlan` `10.10.20.1`; `internet` `203.0.113.10` | `profile-firewall-traffic` | Routes and filters workstation, server, and external traffic. |
+
+Interfaces intentionally use only `zone` and `ip` fields in the structured template. Interface IDs are omitted because
+the MVP only needs to resolve zone membership and device traversal for log generation.
+
+### Firewall Policy Rules
+
+Policy rules are owned by the network device that enforces them. The first matching rule should determine the action,
+path metadata, NAT behavior, and whether a firewall log record is generated.
+
+| Device ID | Rule ID | Source Zones | Destination Zones | Protocols | Destination Ports | Action | Logging | NAT |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `boundary-fw-01` | `allow-workstations-dns` | `workstation-vlan` | `server-vlan` | UDP | `53` | allow | yes | none |
+| `boundary-fw-01` | `allow-workstations-internal-web` | `workstation-vlan` | `server-vlan` | TCP | `80` | allow | yes | none |
+| `boundary-fw-01` | `allow-workstations-external-web` | `workstation-vlan` | `internet` | TCP | `80`, `443` | allow | yes | source NAT to `203.0.113.10` |
+| `boundary-fw-01` | `deny-workstations-other` | `workstation-vlan` | any | any | any | deny | yes | none |
+
+These rules are not source-neutral events. They are environment constraints. A successful event must match an allow
+rule when it crosses `boundary-fw-01`; denied traffic can be modeled by an authored event with `status: denied` that
+matches a deny rule.
 
 ## Sensor Visibility
 
@@ -160,6 +195,7 @@ host's `logging_profiles` list.
 | `server-vlan` | `workstation-vlan` | yes | Required for response-side connection metadata. |
 | `workstation-vlan` | `workstation-vlan` | yes | Useful for future lateral or peer traffic scenarios. |
 | `server-vlan` | `server-vlan` | yes | No MVP scenario currently depends on this path. |
+| `workstation-vlan` | `internet` | no | Boundary firewall telemetry covers external traffic in this template. |
 | `monitoring-vlan` | any | no | Sensor management traffic is out of scope for MVP scenarios. |
 
 Visibility means the sensor can generate network records if a future generator supports the event type. It does not
@@ -190,6 +226,9 @@ output/
         error.log
       auditd/
         audit.log
+    boundary-fw-01/
+      firewall/
+        traffic.log
   metadata/
     ground-truth.jsonl
     scenario-manifest.json
@@ -201,6 +240,8 @@ what produced each file without opening `manifest.json`.
 These paths are derived from host profile attachments. For example, `web-server-01` attaches
 `profile-apache-auditd`, which expands into `logs/web-server-01/apache/access.log`,
 `logs/web-server-01/apache/error.log`, and `logs/web-server-01/auditd/audit.log`.
+Network device paths follow the same source-first pattern. For example, `boundary-fw-01` attaches
+`profile-firewall-traffic`, which expands into `logs/boundary-fw-01/firewall/traffic.log`.
 
 The first implementation should not create empty files for configured streams with zero records. The manifest can
 record omitted streams if coverage visibility is useful.
@@ -212,8 +253,10 @@ Implementations should provide lookup helpers for:
 - Host ID, hostname, FQDN, and IP address.
 - User ID and username.
 - Service ID, service name, FQDN, IP, port, and protocol.
+- Network device ID, interface zone, and interface IP address.
+- Firewall policy rule ID and network device ID.
 - HTTP service route by service ID, method, and path.
-- Logging profile ID and attached host ID.
+- Logging profile ID and attached host or network device ID.
 - DNS name to record value.
 - Zone ID and CIDR when the zone has an enumerated CIDR.
 
@@ -229,6 +272,8 @@ Lookup failures should produce validation errors that name the missing reference
 - A host's primary IP address must belong to the host's zone.
 - Generated traffic between unknown internal IP addresses should be rejected.
 - Events may reference external IP addresses only when the scenario explicitly marks the destination as external.
+- Network device interface IP addresses must belong to the referenced internal zone unless the zone is external.
+- Network devices must not define duplicate interfaces for the same zone unless later routing needs require it.
 
 ### User and Authentication Rules
 
@@ -262,16 +307,28 @@ Lookup failures should produce validation errors that name the missing reference
 - HTTP path defaults should be resolved from the target service's nested `routes` list.
 - SSH activity against `web-server-01` should target `svc-web-ssh`.
 
+### Network Policy Rules
+
+- Every policy rule must belong to a known network device.
+- Every policy rule source and destination zone must resolve to a known zone or the literal `any`.
+- A routed event that crosses a network device must match exactly one first-applicable policy rule.
+- A successful event that crosses a firewall must match an allow rule.
+- A denied event may match a deny rule and should still generate firewall telemetry when rule logging is enabled.
+- NAT fields are policy-owned and should not be authored on source-neutral events.
+
 ### Visibility Rules
 
 - Events observed through `profile-zeek-only` must involve traffic that is visible to `zeek-sensor-01`.
 - Apache records should only be generated for requests handled by `web-server-01`.
 - Auditd records should only be generated by a host with an attached auditd-capable logging profile.
+- Firewall records should only be generated for events whose computed path crosses a network device with an attached
+  firewall-capable logging profile and a matching logged policy rule.
 - The same event may produce records from multiple attached profiles only when each profile has a clear visibility path.
 
 ### Logging Profile Rules
 
 - Every host-attached logging profile ID must resolve to a known logging profile.
+- Every network-device-attached logging profile ID must resolve to a known logging profile.
 - Every logging profile family must define at least one stream.
 - Every stream name must be filesystem-safe.
 - Hosts without logging profiles can own services and participate in events, but they should not generate host-side log
@@ -287,9 +344,11 @@ The environment supports this path:
 2. `linux-ws-01` queries `lab-dns-01` for `web-server-01.internal`.
 3. `lab-dns-01` resolves the name to `10.10.20.21`.
 4. `linux-ws-01` connects to `10.10.20.21:80`.
-5. `web-server-01` serves `GET /`.
-6. `zeek-sensor-01` can observe the DNS lookup and HTTP connection.
-7. `web-server-01` can generate an Apache access record.
+5. `boundary-fw-01` allows the workstation-to-server DNS and HTTP flows through matching policy rules.
+6. `web-server-01` serves `GET /`.
+7. `zeek-sensor-01` can observe the DNS lookup and HTTP connection.
+8. `web-server-01` can generate an Apache access record.
+9. `boundary-fw-01` can generate firewall traffic records when the scenario requests the `firewall` output family.
 
 ### Local Account Misuse and Suspicious Download
 
@@ -299,10 +358,12 @@ The environment supports this path:
 2. `linux-ws-01` generates local authentication telemetry for the login.
 3. `linux-ws-01` queries `lab-dns-01` for `web-server-01.internal`.
 4. `linux-ws-01` connects to `web-server-01` over HTTP.
-5. `web-server-01` serves `/admin`, denies `/login`, or serves `/admin/archive.tar.gz` depending on the scenario.
-6. `zeek-sensor-01` can observe the DNS and HTTP activity.
-7. `web-server-01` can generate Apache access records.
-8. The scenario can write answer-key metadata identifying the suspicious use and download.
+5. `boundary-fw-01` allows the workstation-to-server DNS and HTTP flows through matching policy rules.
+6. `web-server-01` serves `/admin`, denies `/login`, or serves `/admin/archive.tar.gz` depending on the scenario.
+7. `zeek-sensor-01` can observe the DNS and HTTP activity.
+8. `web-server-01` can generate Apache access records.
+9. `boundary-fw-01` can generate firewall traffic records when the scenario requests the `firewall` output family.
+10. The scenario can write answer-key metadata identifying the suspicious use and download.
 
 ## Proposed Structured Template
 
@@ -361,14 +422,6 @@ zones:
         roles:
           - dns-resolver
         logging_profiles: []
-      - id: lab-gateway-01
-        hostname: lab-gateway-01
-        fqdn: lab-gateway-01.internal
-        primary_ip: 10.10.20.1
-        os: linux-network-appliance
-        roles:
-          - gateway
-        logging_profiles: []
   - id: monitoring-vlan
     cidr: 10.10.30.0/24
     hosts:
@@ -381,6 +434,71 @@ zones:
           - network-sensor
         logging_profiles:
           - profile-zeek-only
+  - id: internet
+    type: external
+    hosts: []
+network_devices:
+  - id: boundary-fw-01
+    type: firewall
+    interfaces:
+      - zone: workstation-vlan
+        ip: 10.10.10.1
+      - zone: server-vlan
+        ip: 10.10.20.1
+      - zone: internet
+        ip: 203.0.113.10
+    logging_profiles:
+      - profile-firewall-traffic
+    policies:
+      rules:
+        - id: allow-workstations-dns
+          source_zones:
+            - workstation-vlan
+          destination_zones:
+            - server-vlan
+          protocols:
+            - udp
+          destination_ports:
+            - 53
+          action: allow
+          logging: true
+        - id: allow-workstations-internal-web
+          source_zones:
+            - workstation-vlan
+          destination_zones:
+            - server-vlan
+          protocols:
+            - tcp
+          destination_ports:
+            - 80
+          action: allow
+          logging: true
+        - id: allow-workstations-external-web
+          source_zones:
+            - workstation-vlan
+          destination_zones:
+            - internet
+          protocols:
+            - tcp
+          destination_ports:
+            - 80
+            - 443
+          action: allow
+          logging: true
+          nat:
+            type: source_nat
+            translated_source_ip: 203.0.113.10
+        - id: deny-workstations-other
+          source_zones:
+            - workstation-vlan
+          destination_zones:
+            - any
+          protocols:
+            - any
+          destination_ports:
+            - any
+          action: deny
+          logging: true
 users:
   - id: user-alice
     username: alice
@@ -484,9 +602,6 @@ dns_records:
   - name: lab-dns-01.internal
     type: A
     value: 10.10.20.53
-  - name: lab-gateway-01.internal
-    type: A
-    value: 10.10.20.1
 logging_profiles:
   - id: profile-zeek-only
     families:
@@ -509,12 +624,18 @@ logging_profiles:
       - name: auditd
         streams:
           - audit.log
+  - id: profile-firewall-traffic
+    families:
+      - name: firewall
+        streams:
+          - traffic.log
 ```
 
 ## Phase 1 Translation Notes
 
 - Prefer plain data models for this template before adding a template-loading DSL.
-- Keep host, user, service, and logging profile IDs stable because tests will likely assert them.
+- Keep host, user, service, network device, policy rule, and logging profile IDs stable because tests will likely assert
+  them.
 - Treat hosts without logging profiles as normal environment hosts that do not generate host-side log files.
 - Keep validation errors explicit and reference the environment field that failed.
 - Do not introduce SIEM-specific settings into the environment template.

@@ -30,7 +30,8 @@ architecture:
 
 - Implementing core models, generators, validators, or output writers.
 - Building SIEM-specific collector, parser, index, pipeline, or dashboard configuration.
-- Supporting Windows, Active Directory, cloud identity, firewall, proxy, router, or endpoint products in the MVP.
+- Supporting Windows, Active Directory, cloud identity, vendor-specific firewall, proxy, router, or endpoint products in
+  the MVP.
 - Producing statistically realistic noise models.
 - Freezing the plugin API for long-term compatibility.
 - Requiring ATT&CK metadata on every event or scenario.
@@ -46,7 +47,7 @@ The first useful implementation target after Phase 0 is:
 2. Create source-neutral events for a benign web scenario and a local account misuse scenario.
 3. Preserve deterministic event IDs, correlation IDs, and timestamps from the scenario seed.
 4. Emit generic JSON Lines for the normalized events.
-5. Leave source-specific Zeek, Apache, and auditd generation for later phases.
+5. Leave source-specific Zeek, Apache, auditd, and firewall generation for later phases.
 
 This boundary keeps Phase 1 focused on the domain model rather than source-specific log fidelity.
 
@@ -104,6 +105,7 @@ Environment inventory:
 | `linux-ws-02` | host | workstation | workstation VLAN | TBD | auditd |
 | `web-server-01` | host | web server | server VLAN | TBD | Apache, auditd |
 | `zeek-sensor-01` | sensor | passive network sensor | monitoring | TBD | Zeek |
+| `boundary-fw-01` | network device | boundary firewall | workstation, server, internet | TBD | firewall |
 
 Initial users:
 
@@ -120,9 +122,10 @@ Required planning tasks:
 - Define local account availability per host.
 - Define Apache service details for `web-server-01`.
 - Define Zeek sensor visibility boundaries.
+- Define network device interfaces and policy rules for derived firewall telemetry.
 - Define environment lookup rules for users, hosts, services, and IP addresses.
 - Define which impossible actions should be rejected during validation.
-- Define deterministic IDs for hosts, users, networks, services, and log sources.
+- Define deterministic IDs for hosts, users, networks, services, network devices, policy rules, and log sources.
 
 Expected artifact:
 
@@ -134,6 +137,7 @@ Acceptance criteria:
 - Every host has a stable ID, hostname, role, network zone, and IP address.
 - Every user has explicit valid login hosts.
 - Sensor visibility is clear enough to explain why Zeek records should or should not exist.
+- Network device policy is clear enough to explain why firewall records should or should not exist.
 
 ### Workstream 3: Canonical Scenarios
 
@@ -254,7 +258,7 @@ Acceptance criteria:
 - A future writer can implement the directory contract without guessing path rules.
 - The manifest describes generated files without assigning platform-specific routing, normalization, or pipeline
   configuration.
-- The layout can separate Zeek, Apache, auditd, and generic JSONL records by source and family.
+- The layout can separate Zeek, Apache, auditd, firewall, and generic JSONL records by source and family.
 
 ### Workstream 6: Zeek Schema Research
 
