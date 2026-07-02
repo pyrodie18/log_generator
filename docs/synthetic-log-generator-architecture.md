@@ -34,7 +34,8 @@ Statistically realistic generation should be designed for but not required in th
 - The generator should write an optional answer-key file at `output/metadata/ground-truth.jsonl` for demos, training, and CTF-style exercises.
 - The generator should write a dataset manifest at `output/manifest.json` that inventories generated files and records
   human-readable parsing hints without generating SIEM configuration.
-- MITRE ATT&CK metadata depth: still open. This means deciding whether attack steps should require ATT&CK technique IDs such as `T1059`, or merely support them as optional labels.
+- MITRE ATT&CK metadata is optional for the MVP. Attack-style scenarios may include technique labels, but benign
+  scenarios and core event models should not require them.
 - Plugin API stability: early implementation may favor iteration over long-term backward compatibility.
 
 ## Recommended Architecture

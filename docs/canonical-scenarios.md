@@ -468,5 +468,6 @@ These scenarios should become exact source-neutral test fixtures in Phase 1.
 
 ## Open Decisions Carried Forward
 
-No scenario-level open decisions remain in this artifact. Broader YAML loading and manifest classification decisions
-are tracked in `docs/phase-0-planning.md`.
+No scenario-level open decisions remain in this artifact. YAML loading is explicitly deferred to Phase 2 in
+`docs/phase-0-planning.md`; Phase 1 can use Python fixtures or in-memory scenario construction as long as the expanded
+events match these canonical scenarios.

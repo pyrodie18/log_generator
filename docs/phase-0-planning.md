@@ -101,11 +101,12 @@ Environment inventory:
 
 | ID | Type | Role | Network Zone | Address | Logging Coverage |
 | --- | --- | --- | --- | --- | --- |
-| `linux-ws-01` | host | workstation | workstation VLAN | TBD | auditd |
-| `linux-ws-02` | host | workstation | workstation VLAN | TBD | auditd |
-| `web-server-01` | host | web server | server VLAN | TBD | Apache, auditd |
-| `zeek-sensor-01` | sensor | passive network sensor | monitoring | TBD | Zeek |
-| `boundary-fw-01` | network device | boundary firewall | workstation, server, internet | TBD | firewall |
+| `linux-ws-01` | host | workstation | `workstation-vlan` | `10.10.10.11` | auditd |
+| `linux-ws-02` | host | workstation | `workstation-vlan` | `10.10.10.12` | auditd |
+| `web-server-01` | host | web server | `server-vlan` | `10.10.20.21` | Apache, auditd |
+| `lab-dns-01` | host | DNS resolver | `server-vlan` | `10.10.20.53` | none |
+| `zeek-sensor-01` | sensor | passive network sensor | `monitoring-vlan` | `10.10.30.31` | Zeek |
+| `boundary-fw-01` | network device | boundary firewall | workstation, server, internet | `10.10.10.1`, `10.10.20.1`, `203.0.113.10` | firewall |
 
 Initial users:
 
@@ -305,10 +306,37 @@ Initial decisions to record:
 | Manifest scope | Describe files and source systems only | Keeps output metadata SIEM-neutral and human-readable. |
 | First Zeek output format | Native Zeek-style TSV by default | Preserves source fidelity; Zeek JSONL can be added later if useful. |
 | First Zeek streams | `conn.log`, `dns.log`, `http.log` | Covers the canonical web browsing records without adding TLS or file streams early. |
+| YAML loading schedule | Defer YAML parsing to Phase 2 | Keeps Phase 1 focused on source-neutral models, expansion, validation, and generic JSONL output. |
 
-Open decisions:
+Open decisions after step 7 review:
 
-- Should Phase 1 implement YAML loading immediately, or should YAML wait until Phase 2 after Python models settle?
+- None. New decisions should be recorded here with an owner, default, or explicit deferral before they affect Phase 1.
+
+## Tightened MVP Boundary
+
+Step 7 closes the remaining Phase 0 decisions and narrows the first implementation to the smallest useful source
+neutral core.
+
+Phase 1 should include:
+
+- Python object models or fixtures for the `linux-mini-lab` environment.
+- Source-neutral event envelope and the four scenario-required event types.
+- Deterministic identifiers, timestamps, ordering, correlation IDs, and parent event links.
+- Helper expansion from authored web activity into DNS, connection, and web request events for the canonical services.
+- Semantic validation against the environment template.
+- Generic normalized JSON Lines output and the MVP manifest contract.
+- Unit tests based on the two canonical expanded scenarios.
+
+Phase 1 should not include:
+
+- YAML file parsing or a public authoring CLI.
+- Source-specific Zeek, Apache, auditd, or firewall log generation.
+- Noise profiles, random background activity, or statistically realistic traffic modeling.
+- TLS, process execution, Windows, Active Directory, cloud, proxy, or vendor-specific firewall support.
+- A stable plugin API.
+
+The YAML schema remains a reviewed design artifact for Phase 2. Phase 1 may use Python constructors, fixtures, or
+in-memory scenario definitions as long as the resulting expanded events match the canonical scenario documents.
 
 ## Phase 0 Sequence
 
@@ -321,7 +349,7 @@ Recommended order:
 5. Draft the output directory and manifest contract.
 6. Research and document Zeek schema notes.
 7. Review open decisions and tighten the MVP boundary.
-8. Create Phase 1 implementation issues or task breakdown.
+8. Create the Phase 1 implementation task breakdown in `docs/phase-1-task-breakdown.md`.
 
 This order keeps the design grounded in concrete scenarios instead of expanding the taxonomy abstractly.
 
@@ -351,7 +379,7 @@ flake8 --max-line-length=120 .
 | Phase 0 grows too broad | Delays implementation | Tie each artifact to the two canonical scenarios. |
 | Event taxonomy is too narrow | Requires churn in Phase 1 | Allow extensions and document known follow-up events. |
 | Event taxonomy is too broad | Makes core models vague | Do not add events that the canonical scenarios do not need. |
-| YAML schema becomes too magical | Hard to validate and explain | Keep MVP YAML explicit. |
+| YAML schema becomes too magical | Hard to validate and explain | Keep MVP YAML explicit and defer parser implementation to Phase 2. |
 | Zeek research blocks all planning | Slows Phase 0 | Treat Zeek notes as a generator prerequisite. |
 | SIEM hints become accidental config | Scope creep | Manifest describes files but does not generate ingestion config. |
 | Attack metadata becomes mandatory too early | Burdens benign scenarios | Keep ATT&CK fields optional. |
@@ -366,6 +394,7 @@ Phase 0 is complete when:
 - `docs/scenario-yaml-schema-draft.md` exists and includes examples for both scenarios.
 - `docs/output-contract-draft.md` exists and defines path and manifest expectations.
 - `docs/zeek-schema-notes.md` exists and identifies the first Zeek schema targets.
+- `docs/phase-1-task-breakdown.md` exists and turns the Phase 1 handoff into ordered implementation tasks.
 - Open decisions have owners, defaults, or explicit deferrals.
 - Phase 1 tasks can be written directly from the Phase 0 artifacts.
 - The full test suite and flake8 checks pass after documentation updates.
@@ -380,5 +409,8 @@ Expected Phase 1 starting tasks:
 - Create the `linux-mini-lab` fixture or template from the Phase 0 environment document.
 - Create event envelope and event type models from the taxonomy draft.
 - Add deterministic ID, scenario seed, and correlation helpers.
+- Add helper expansion for the two canonical web scenarios.
 - Add semantic validation for unknown users, unknown hosts, invalid local logins, and impossible service references.
+- Add generic normalized JSONL output and a minimal manifest writer.
 - Add tests for the two canonical scenarios at the source-neutral event level.
+- Defer YAML parsing until Phase 2; Phase 1 tests should construct scenarios through Python fixtures or model objects.

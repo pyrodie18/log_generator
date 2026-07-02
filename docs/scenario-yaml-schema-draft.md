@@ -580,9 +580,10 @@ noise_profiles:
 Until noise behavior is implemented, validators should reject `noise_profiles` with an explicit "not supported yet"
 message instead of silently ignoring it.
 
-## Phase 1 Handoff
+## Phase 2 Handoff
 
-The first implementation can start with this subset:
+YAML loading is deferred until Phase 2 so Phase 1 can prove the source-neutral core model first. When YAML
+implementation starts, it can begin with this subset:
 
 - Parse one YAML document per file.
 - Support `schema_version`, `id`, `name`, `seed`, `environment`, `time_range`, `output_families`, `events`,
