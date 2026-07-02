@@ -7,12 +7,16 @@ from datetime import datetime, timezone
 import pytest
 
 from log_generator.core.events import DnsLookupEvent
+from log_generator.core.environment import build_linux_mini_lab
 from log_generator.core.scenarios import (
+    AuthoredWebRequest,
     Scenario,
     ScenarioEvent,
     build_benign_internal_web_scenario,
     build_local_account_misuse_web_scenario,
+    classify_web_request_path,
     derive_event_id,
+    expand_authored_events,
     parse_utc_datetime,
 )
 
@@ -106,6 +110,83 @@ def test_misuse_canonical_scenario_has_stable_identity_and_ordering() -> None:
     assert scenario.correlation_ids() == ("corr-local-account-misuse-001",)
     assert ordered_events[4].parent_event_id == "evt-misuse-web-003"
     assert_parent_events_are_earlier(scenario)
+
+
+def test_web_expansion_generates_helpers_and_route_status_code() -> None:
+    """
+    Verify authored web requests expand into DNS, connection, and request events.
+
+    Returns:
+        None: This test asserts expanded helper behavior directly.
+    """
+    environment = build_linux_mini_lab()
+    authored_events = (
+        AuthoredWebRequest(
+            event_id="evt-web-request",
+            timestamp=parse_utc_datetime("2026-01-15T14:00:02Z"),
+            actor_user_id="user-alice",
+            source_host_id="linux-ws-01",
+            service_id="svc-web-http",
+            method="GET",
+            path="/",
+            correlation_id="corr-web-expansion",
+        ),
+    )
+
+    events = expand_authored_events("scenario-web-expansion", 1001, environment, authored_events)
+    expanded_events = tuple(scenario_event.event for scenario_event in events)
+
+    assert tuple(event.event_type for event in expanded_events) == (
+        "dns_lookup",
+        "network_connection",
+        "web_request",
+    )
+    assert tuple(event.timestamp.isoformat() for event in expanded_events) == (
+        "2026-01-15T14:00:00+00:00",
+        "2026-01-15T14:00:01+00:00",
+        "2026-01-15T14:00:02+00:00",
+    )
+    assert expanded_events[0].event_id == derive_event_id("scenario-web-expansion", "dns_lookup", 1, 1001)
+    assert expanded_events[1].parent_event_id == expanded_events[0].event_id
+    assert expanded_events[2].parent_event_id == expanded_events[1].event_id
+    assert expanded_events[2].status_code == 200
+
+
+def test_misuse_web_expansion_reuses_connection_and_classifies_download() -> None:
+    """
+    Verify the misuse scenario reuses the HTTP connection and marks the archive as a download.
+
+    Returns:
+        None: This test asserts canonical web expansion behavior directly.
+    """
+    scenario = build_local_account_misuse_web_scenario()
+    ordered_events = scenario.ordered_events()
+
+    assert len(ordered_events) == 5
+    assert ordered_events[3].event_type == "web_request"
+    assert ordered_events[4].event_type == "web_request"
+    assert ordered_events[3].parent_event_id == "evt-misuse-web-003"
+    assert ordered_events[4].parent_event_id == "evt-misuse-web-003"
+    assert ordered_events[4].metadata == {
+        "download_classification": "download",
+        "file_name": "archive.tar.gz",
+    }
+
+
+def test_web_path_download_classification_keeps_pages_unclassified() -> None:
+    """
+    Verify download classification only labels non-HTML file paths.
+
+    Returns:
+        None: This test asserts path classification directly.
+    """
+    assert classify_web_request_path("/") is None
+    assert classify_web_request_path("/admin") is None
+    assert classify_web_request_path("/about.html") is None
+    assert classify_web_request_path("/admin/archive.tar.gz") == {
+        "download_classification": "download",
+        "file_name": "archive.tar.gz",
+    }
 
 
 def test_scenario_orders_same_timestamp_events_by_sequence_order() -> None:
