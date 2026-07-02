@@ -1,0 +1,204 @@
+"""
+Tests for source-neutral event models.
+"""
+
+from datetime import datetime, timezone
+
+import pytest
+
+from log_generator.core.events import (
+    DnsLookupEvent,
+    LinuxLocalLoginEvent,
+    NetworkConnectionEvent,
+    WebRequestEvent,
+)
+
+
+def test_dns_lookup_event_serializes_required_and_optional_fields() -> None:
+    """
+    Verify DNS lookup events serialize the common envelope and DNS fields.
+
+    Returns:
+        None: This test asserts serialized event fields directly.
+    """
+    event = DnsLookupEvent(
+        event_id="evt-benign-web-001",
+        scenario_id="scenario-benign-internal-web",
+        timestamp=datetime(2026, 1, 15, 14, 0, 3, tzinfo=timezone.utc),
+        status="success",
+        correlation_id="corr-benign-web",
+        source_host_id="linux-ws-01",
+        query_name="web-server-01.internal",
+        query_type="A",
+        destination_host_id="lab-dns-01",
+        service_id="svc-dns",
+        resolved_addresses=["10.10.20.21"],
+        rcode="NOERROR",
+    )
+
+    assert event.to_dict() == {
+        "event_id": "evt-benign-web-001",
+        "scenario_id": "scenario-benign-internal-web",
+        "event_type": "dns_lookup",
+        "timestamp": "2026-01-15T14:00:03+00:00",
+        "status": "success",
+        "correlation_id": "corr-benign-web",
+        "source_host_id": "linux-ws-01",
+        "destination_host_id": "lab-dns-01",
+        "service_id": "svc-dns",
+        "query_name": "web-server-01.internal",
+        "query_type": "A",
+        "resolved_addresses": ["10.10.20.21"],
+        "rcode": "NOERROR",
+    }
+
+
+def test_network_connection_event_serializes_required_fields_without_placeholders() -> None:
+    """
+    Verify network connection events omit unspecified optional and source-specific fields.
+
+    Returns:
+        None: This test asserts serialized event fields directly.
+    """
+    event = NetworkConnectionEvent(
+        event_id="evt-benign-web-002",
+        scenario_id="scenario-benign-internal-web",
+        timestamp=datetime(2026, 1, 15, 14, 0, 4, tzinfo=timezone.utc),
+        status="success",
+        correlation_id="corr-benign-web",
+        source_host_id="linux-ws-01",
+        source_ip="10.10.10.11",
+        destination_ip="10.10.20.21",
+        destination_port=80,
+        network_protocol="tcp",
+        parent_event_id="evt-benign-web-001",
+        destination_host_id="web-server-01",
+        service_id="svc-web-http",
+        application_protocol="http",
+    )
+    serialized_event = event.to_dict()
+
+    assert serialized_event["event_type"] == "network_connection"
+    assert serialized_event["source_ip"] == "10.10.10.11"
+    assert serialized_event["destination_ip"] == "10.10.20.21"
+    assert serialized_event["destination_port"] == 80
+    assert serialized_event["network_protocol"] == "tcp"
+    assert serialized_event["application_protocol"] == "http"
+    assert serialized_event["parent_event_id"] == "evt-benign-web-001"
+    assert "uid" not in serialized_event
+    assert "firewall_rule_name" not in serialized_event
+    assert "metadata" not in serialized_event
+    assert "attack" not in serialized_event
+
+
+def test_web_request_event_requires_status_code_and_serializes_metadata() -> None:
+    """
+    Verify web request events include expanded status codes and optional source-neutral metadata.
+
+    Returns:
+        None: This test asserts serialized event fields directly.
+    """
+    event = WebRequestEvent(
+        event_id="evt-misuse-web-005",
+        scenario_id="scenario-local-account-misuse-web",
+        timestamp=datetime(2026, 1, 15, 14, 5, 20, tzinfo=timezone.utc),
+        status="success",
+        correlation_id="corr-misuse-web",
+        source_host_id="linux-ws-01",
+        service_id="svc-web-http",
+        method="GET",
+        path="/admin/archive.tar.gz",
+        status_code=200,
+        parent_event_id="evt-misuse-web-003",
+        actor_user_id="user-alice",
+        destination_host_id="web-server-01",
+        metadata={"download_classification": "download", "file_name": "archive.tar.gz"},
+        attack={"technique_id": "T1005", "tactic": "collection"},
+    )
+    serialized_event = event.to_dict()
+
+    assert serialized_event["event_type"] == "web_request"
+    assert serialized_event["method"] == "GET"
+    assert serialized_event["path"] == "/admin/archive.tar.gz"
+    assert serialized_event["status_code"] == 200
+    assert serialized_event["metadata"] == {
+        "download_classification": "download",
+        "file_name": "archive.tar.gz",
+    }
+    assert serialized_event["attack"] == {"technique_id": "T1005", "tactic": "collection"}
+    assert "apache_bytes_sent" not in serialized_event
+
+
+def test_linux_local_login_event_serializes_required_fields() -> None:
+    """
+    Verify Linux local login events serialize login-specific fields.
+
+    Returns:
+        None: This test asserts serialized event fields directly.
+    """
+    event = LinuxLocalLoginEvent(
+        event_id="evt-misuse-web-001",
+        scenario_id="scenario-local-account-misuse-web",
+        timestamp=datetime(2026, 1, 15, 14, 5, 0, tzinfo=timezone.utc),
+        status="success",
+        correlation_id="corr-misuse-web",
+        actor_user_id="user-alice",
+        target_host_id="linux-ws-01",
+        login_method="local_console",
+        metadata={"activity_classification": "suspicious"},
+    )
+
+    assert event.to_dict() == {
+        "event_id": "evt-misuse-web-001",
+        "scenario_id": "scenario-local-account-misuse-web",
+        "event_type": "linux_local_login",
+        "timestamp": "2026-01-15T14:05:00+00:00",
+        "status": "success",
+        "correlation_id": "corr-misuse-web",
+        "actor_user_id": "user-alice",
+        "metadata": {"activity_classification": "suspicious"},
+        "target_host_id": "linux-ws-01",
+        "login_method": "local_console",
+    }
+
+
+def test_event_timestamp_must_be_timezone_aware() -> None:
+    """
+    Verify naive datetimes are rejected before serialization.
+
+    Returns:
+        None: This test asserts timestamp validation directly.
+    """
+    with pytest.raises(ValueError, match="event timestamp must be timezone-aware"):
+        DnsLookupEvent(
+            event_id="evt-invalid",
+            scenario_id="scenario-invalid",
+            timestamp=datetime(2026, 1, 15, 14, 0, 3),
+            status="success",
+            correlation_id="corr-invalid",
+            source_host_id="linux-ws-01",
+            query_name="web-server-01.internal",
+            query_type="A",
+        )
+
+
+def test_event_status_must_be_supported() -> None:
+    """
+    Verify unsupported status values are rejected.
+
+    Returns:
+        None: This test asserts status validation directly.
+    """
+    with pytest.raises(ValueError, match="unsupported event status 'partial'"):
+        WebRequestEvent(
+            event_id="evt-invalid",
+            scenario_id="scenario-invalid",
+            timestamp=datetime(2026, 1, 15, 14, 0, 5, tzinfo=timezone.utc),
+            status="partial",
+            correlation_id="corr-invalid",
+            source_host_id="linux-ws-01",
+            service_id="svc-web-http",
+            method="GET",
+            path="/",
+            status_code=200,
+        )
