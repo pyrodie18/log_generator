@@ -118,6 +118,36 @@ class AuthoredWebRequest:
 
 
 @dataclass(frozen=True)
+class AnswerKeyRecord:
+    """
+    Represent one hidden answer-key record for training and evaluation metadata.
+    """
+
+    scenario_id: str
+    correlation_id: str
+    label: str
+    primary_event_id: str
+    supporting_event_ids: tuple[str, ...]
+    description: str
+
+    def to_dict(self) -> dict[str, object]:
+        """
+        Serialize the answer-key record to a metadata dictionary.
+
+        Returns:
+            dict[str, object]: JSON-compatible answer-key record.
+        """
+        return {
+            "scenario_id": self.scenario_id,
+            "correlation_id": self.correlation_id,
+            "label": self.label,
+            "primary_event_id": self.primary_event_id,
+            "supporting_event_ids": list(self.supporting_event_ids),
+            "description": self.description,
+        }
+
+
+@dataclass(frozen=True)
 class ScenarioEvent:
     """
     Pair a source-neutral event with its deterministic sequence order.
@@ -151,6 +181,8 @@ class Scenario:
     events: tuple[ScenarioEvent, ...]
     end_time: Optional[datetime] = None
     output_families: tuple[str, ...] = ("generic-normalized",)
+    answer_key: tuple[AnswerKeyRecord, ...] = ()
+    authored_event_count: Optional[int] = None
 
     def __post_init__(self) -> None:
         """
@@ -678,6 +710,7 @@ def build_benign_internal_web_scenario() -> Scenario:
         start_time=start_time,
         end_time=parse_utc_datetime("2026-01-15T14:00:02Z"),
         events=events,
+        authored_event_count=len(authored_events),
     )
 
 
@@ -747,10 +780,24 @@ def build_local_account_misuse_web_scenario() -> Scenario:
         start_time=start_time,
         end_time=parse_utc_datetime("2026-01-15T03:12:28Z"),
         events=events,
+        answer_key=(
+            AnswerKeyRecord(
+                scenario_id=scenario_id,
+                correlation_id=correlation_id,
+                label="suspicious_internal_web_download",
+                primary_event_id="evt-misuse-web-005",
+                supporting_event_ids=("evt-misuse-web-001", "evt-misuse-web-004"),
+                description=(
+                    "Suspicious local account use followed by admin page access and archive download."
+                ),
+            ),
+        ),
+        authored_event_count=len(authored_events),
     )
 
 
 __all__ = [
+    "AnswerKeyRecord",
     "AuthoredWebRequest",
     "Scenario",
     "ScenarioEvent",
