@@ -9,7 +9,8 @@ import re
 from typing import Any, Optional, Union
 
 from log_generator.core.environment import Environment, build_linux_mini_lab
-from log_generator.core.events import VALID_STATUSES, normalize_utc_timestamp
+from log_generator.core.events import LinuxLocalLoginEvent, VALID_STATUSES, normalize_utc_timestamp
+from log_generator.core.scenarios import AuthoredEvent, AuthoredWebRequest, Scenario, expand_authored_events
 from log_generator.output.jsonl import validate_path_component
 
 
@@ -163,6 +164,19 @@ def load_scenario_yaml(path: Path) -> ParsedScenarioYaml:
     return parse_scenario_yaml_text(path.read_text(encoding="utf-8"))
 
 
+def build_scenario_from_yaml(path: Path) -> Scenario:
+    """
+    Load a YAML scenario file and convert it into an expanded source-neutral scenario.
+
+    Args:
+        path (Path): YAML scenario file to read.
+
+    Returns:
+        Scenario: Expanded source-neutral scenario.
+    """
+    return build_scenario_from_parsed_yaml(load_scenario_yaml(path))
+
+
 def parse_scenario_yaml_text(text: str) -> ParsedScenarioYaml:
     """
     Parse and validate a single YAML scenario document from text.
@@ -176,6 +190,19 @@ def parse_scenario_yaml_text(text: str) -> ParsedScenarioYaml:
     document = _load_yaml_document(text)
 
     return parse_scenario_yaml_document(document)
+
+
+def build_scenario_from_yaml_text(text: str) -> Scenario:
+    """
+    Parse YAML scenario text and convert it into an expanded source-neutral scenario.
+
+    Args:
+        text (str): YAML scenario document text.
+
+    Returns:
+        Scenario: Expanded source-neutral scenario.
+    """
+    return build_scenario_from_parsed_yaml(parse_scenario_yaml_text(text))
 
 
 def parse_scenario_yaml_document(document: dict[str, Any]) -> ParsedScenarioYaml:
@@ -237,6 +264,421 @@ def parse_scenario_yaml_document(document: dict[str, Any]) -> ParsedScenarioYaml
         answer_key=answer_key,
         metadata=metadata,
     )
+
+
+def build_scenario_from_parsed_yaml(parsed: ParsedScenarioYaml) -> Scenario:
+    """
+    Convert a parsed YAML scenario into the existing source-neutral Scenario model.
+
+    Args:
+        parsed (ParsedScenarioYaml): Structurally valid parsed YAML scenario.
+
+    Returns:
+        Scenario: Expanded source-neutral scenario.
+    """
+    environment = _lookup_environment(parsed.environment_id)
+
+    if environment is None:
+        raise ScenarioYamlError(
+            [_error(parsed.scenario_id, "environment.id", parsed.environment_id, "unknown environment")]
+        )
+
+    authored_events = _build_authored_events(parsed)
+    expanded_events = expand_authored_events(
+        scenario_id=parsed.scenario_id,
+        seed=parsed.seed,
+        environment=environment,
+        authored_events=authored_events,
+    )
+
+    return Scenario(
+        id=parsed.scenario_id,
+        name=parsed.name,
+        seed=parsed.seed,
+        environment_id=parsed.environment_id,
+        environment_version=parsed.environment_version,
+        start_time=parsed.start_time,
+        end_time=parsed.end_time,
+        output_families=parsed.output_families,
+        events=expanded_events,
+        authored_event_count=len(parsed.events),
+    )
+
+
+def _build_authored_events(parsed: ParsedScenarioYaml) -> tuple[AuthoredEvent, ...]:
+    """
+    Build Phase 1 authored event primitives from parsed YAML events.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario to convert.
+
+    Returns:
+        tuple[AuthoredEvent, ...]: Authored event primitives accepted by scenario expansion.
+    """
+    errors: list[ScenarioYamlValidationError] = []
+    authored_events: list[AuthoredEvent] = []
+    correlation_ids_by_event_id: dict[str, str] = {}
+    event_types_by_id = {event.event_id: event.event_type for event in parsed.events}
+    all_authored_event_ids = {event.event_id for event in parsed.events}
+
+    for parsed_event in parsed.events:
+        correlation_id = _event_correlation_id(parsed, parsed_event, correlation_ids_by_event_id)
+        parent_event_id = parsed_event.after
+
+        if parsed_event.event_type == "web_request":
+            authored_event = _build_authored_web_request(
+                parsed=parsed,
+                parsed_event=parsed_event,
+                correlation_id=correlation_id,
+                parent_event_id=parent_event_id,
+                event_types_by_id=event_types_by_id,
+                all_authored_event_ids=all_authored_event_ids,
+                errors=errors,
+            )
+        elif parsed_event.event_type == "linux_local_login":
+            authored_event = _build_linux_local_login_event(
+                parsed=parsed,
+                parsed_event=parsed_event,
+                correlation_id=correlation_id,
+                parent_event_id=parent_event_id,
+                errors=errors,
+            )
+        else:
+            errors.append(
+                _error(
+                    parsed.scenario_id,
+                    _event_field_path(parsed_event, "type"),
+                    parsed_event.event_type,
+                    "unsupported event type",
+                )
+            )
+            continue
+
+        if authored_event is not None:
+            authored_events.append(authored_event)
+            correlation_ids_by_event_id[parsed_event.event_id] = correlation_id
+
+    if errors:
+        raise ScenarioYamlError(errors)
+
+    return tuple(authored_events)
+
+
+def _build_authored_web_request(
+    parsed: ParsedScenarioYaml,
+    parsed_event: ParsedYamlEvent,
+    correlation_id: str,
+    parent_event_id: Optional[str],
+    event_types_by_id: dict[str, str],
+    all_authored_event_ids: set[str],
+    errors: list[ScenarioYamlValidationError],
+) -> Optional[AuthoredWebRequest]:
+    """
+    Convert one parsed YAML web request into an AuthoredWebRequest.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        parsed_event (ParsedYamlEvent): Parsed YAML web request event.
+        correlation_id (str): Correlation ID resolved for the event.
+        parent_event_id (Optional[str]): Parent event ID inferred from `after`.
+        event_types_by_id (dict[str, str]): Authored event types by event ID.
+        all_authored_event_ids (set[str]): Authored event IDs used to avoid helper ID collisions.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        Optional[AuthoredWebRequest]: Authored web request when required fields are valid.
+    """
+    raw_event = parsed_event.raw
+    actor_user_id = _required_event_string(parsed, parsed_event, "actor", errors)
+    source_host_id = _required_event_string(parsed, parsed_event, "source_host", errors)
+    service_id = _required_event_string(parsed, parsed_event, "service", errors)
+    method = _required_event_string(parsed, parsed_event, "method", errors)
+    path = _required_event_string(parsed, parsed_event, "path", errors)
+    status = _event_status(raw_event)
+    status_code = _optional_event_integer(parsed, parsed_event, "status_code", errors)
+
+    if not all((actor_user_id, source_host_id, service_id, method, path)):
+        return None
+
+    dns_helper_offset = timedelta(seconds=2)
+    connection_helper_offset = timedelta(seconds=1)
+
+    # Login-driven web activity reserves a little extra time for generated DNS and connection helpers.
+    if parent_event_id is not None and event_types_by_id.get(parent_event_id) == "linux_local_login":
+        dns_helper_offset = timedelta(seconds=3)
+        connection_helper_offset = timedelta(seconds=2)
+
+    return AuthoredWebRequest(
+        event_id=parsed_event.event_id,
+        timestamp=parsed_event.timestamp,
+        actor_user_id=actor_user_id,
+        source_host_id=source_host_id,
+        service_id=service_id,
+        method=method,
+        path=path,
+        correlation_id=correlation_id,
+        status=status,
+        parent_event_id=parent_event_id,
+        status_code=status_code,
+        attack=_optional_dict(raw_event.get("attack")),
+        metadata=_optional_dict(raw_event.get("metadata")),
+        helper_event_ids=_canonical_helper_event_ids(parsed_event.event_id, all_authored_event_ids),
+        dns_helper_offset=dns_helper_offset,
+        connection_helper_offset=connection_helper_offset,
+    )
+
+
+def _build_linux_local_login_event(
+    parsed: ParsedScenarioYaml,
+    parsed_event: ParsedYamlEvent,
+    correlation_id: str,
+    parent_event_id: Optional[str],
+    errors: list[ScenarioYamlValidationError],
+) -> Optional[LinuxLocalLoginEvent]:
+    """
+    Convert one parsed YAML Linux local login into a source-neutral login event.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        parsed_event (ParsedYamlEvent): Parsed YAML login event.
+        correlation_id (str): Correlation ID resolved for the event.
+        parent_event_id (Optional[str]): Parent event ID inferred from `after`.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        Optional[LinuxLocalLoginEvent]: Login event when required fields are valid.
+    """
+    raw_event = parsed_event.raw
+    actor_user_id = _required_event_string(parsed, parsed_event, "actor", errors)
+    target_host_id = _required_event_string(parsed, parsed_event, "target_host", errors)
+    login_method = _required_event_string(parsed, parsed_event, "login_method", errors)
+    source_host_id = _optional_event_string(parsed, parsed_event, "source_host", errors)
+    source_ip = _optional_event_string(parsed, parsed_event, "source_ip", errors)
+
+    if not all((actor_user_id, target_host_id, login_method)):
+        return None
+
+    return LinuxLocalLoginEvent(
+        event_id=parsed_event.event_id,
+        scenario_id=parsed.scenario_id,
+        timestamp=parsed_event.timestamp,
+        status=_event_status(raw_event),
+        correlation_id=correlation_id,
+        parent_event_id=parent_event_id,
+        actor_user_id=actor_user_id,
+        target_host_id=target_host_id,
+        login_method=login_method,
+        source_host_id=source_host_id,
+        source_ip=source_ip,
+        metadata=_optional_dict(raw_event.get("metadata")),
+        attack=_optional_dict(raw_event.get("attack")),
+    )
+
+
+def _event_correlation_id(
+    parsed: ParsedScenarioYaml,
+    parsed_event: ParsedYamlEvent,
+    correlation_ids_by_event_id: dict[str, str],
+) -> str:
+    """
+    Resolve or derive a deterministic correlation ID for an authored event.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        parsed_event (ParsedYamlEvent): Parsed YAML event.
+        correlation_ids_by_event_id (dict[str, str]): Correlation IDs for earlier events.
+
+    Returns:
+        str: Explicit, inherited, or generated correlation ID.
+    """
+    raw_correlation_id = parsed_event.raw.get("correlation_id")
+
+    if isinstance(raw_correlation_id, str) and raw_correlation_id:
+        return raw_correlation_id
+
+    if parsed_event.after in correlation_ids_by_event_id:
+        return correlation_ids_by_event_id[parsed_event.after]
+
+    return f"corr-{parsed.scenario_id}-{parsed_event.source_index + 1:03d}"
+
+
+def _canonical_helper_event_ids(event_id: str, all_authored_event_ids: set[str]) -> Optional[dict[str, str]]:
+    """
+    Derive canonical helper IDs when an authored event leaves numbered gaps for helpers.
+
+    Args:
+        event_id (str): Authored web request event ID.
+        all_authored_event_ids (set[str]): Authored event IDs used to avoid helper ID collisions.
+
+    Returns:
+        Optional[dict[str, str]]: Helper ID overrides when the canonical pattern is safe.
+    """
+    match = re.match(r"^(?P<prefix>.+-)(?P<number>\d{3})$", event_id)
+
+    if match is None:
+        return None
+
+    number = int(match.group("number"))
+
+    if number < 3:
+        return None
+
+    prefix = match.group("prefix")
+    dns_helper_id = f"{prefix}{number - 2:03d}"
+    connection_helper_id = f"{prefix}{number - 1:03d}"
+
+    # Do not invent helper IDs that would collide with events the author explicitly wrote.
+    if dns_helper_id in all_authored_event_ids or connection_helper_id in all_authored_event_ids:
+        return None
+
+    return {
+        "dns_lookup": dns_helper_id,
+        "network_connection": connection_helper_id,
+    }
+
+
+def _event_status(raw_event: dict[str, Any]) -> str:
+    """
+    Return an event status with the source-neutral default applied.
+
+    Args:
+        raw_event (dict[str, Any]): Raw event mapping.
+
+    Returns:
+        str: Event status.
+    """
+    return raw_event.get("status", "success")
+
+
+def _required_event_string(
+    parsed: ParsedScenarioYaml,
+    parsed_event: ParsedYamlEvent,
+    field_name: str,
+    errors: list[ScenarioYamlValidationError],
+) -> Optional[str]:
+    """
+    Read a required string from a parsed YAML event.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        parsed_event (ParsedYamlEvent): Parsed YAML event.
+        field_name (str): Required field name.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        Optional[str]: Field value when valid.
+    """
+    value = parsed_event.raw.get(field_name)
+    field_path = _event_field_path(parsed_event, field_name)
+
+    if value is None:
+        errors.append(_error(parsed.scenario_id, field_path, None, "field is required"))
+        return None
+
+    if not isinstance(value, str):
+        errors.append(_error(parsed.scenario_id, field_path, value, "expected string"))
+        return None
+
+    if not value:
+        errors.append(_error(parsed.scenario_id, field_path, value, "must not be empty"))
+        return None
+
+    return value
+
+
+def _optional_event_string(
+    parsed: ParsedScenarioYaml,
+    parsed_event: ParsedYamlEvent,
+    field_name: str,
+    errors: list[ScenarioYamlValidationError],
+) -> Optional[str]:
+    """
+    Read an optional string from a parsed YAML event.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        parsed_event (ParsedYamlEvent): Parsed YAML event.
+        field_name (str): Optional field name.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        Optional[str]: Field value when present and valid.
+    """
+    if field_name not in parsed_event.raw or parsed_event.raw[field_name] is None:
+        return None
+
+    value = parsed_event.raw[field_name]
+
+    if not isinstance(value, str):
+        errors.append(_error(parsed.scenario_id, _event_field_path(parsed_event, field_name), value, "expected string"))
+        return None
+
+    return value
+
+
+def _optional_event_integer(
+    parsed: ParsedScenarioYaml,
+    parsed_event: ParsedYamlEvent,
+    field_name: str,
+    errors: list[ScenarioYamlValidationError],
+) -> Optional[int]:
+    """
+    Read an optional integer from a parsed YAML event.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        parsed_event (ParsedYamlEvent): Parsed YAML event.
+        field_name (str): Optional field name.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        Optional[int]: Field value when present and valid.
+    """
+    if field_name not in parsed_event.raw or parsed_event.raw[field_name] is None:
+        return None
+
+    value = parsed_event.raw[field_name]
+
+    if not isinstance(value, int) or isinstance(value, bool):
+        errors.append(
+            _error(parsed.scenario_id, _event_field_path(parsed_event, field_name), value, "expected integer")
+        )
+        return None
+
+    return value
+
+
+def _optional_dict(value: Any) -> Optional[dict[str, Any]]:
+    """
+    Return a shallow dictionary copy for optional mapping values.
+
+    Args:
+        value (Any): Candidate mapping value.
+
+    Returns:
+        Optional[dict[str, Any]]: Dictionary copy, or None when absent or empty.
+    """
+    if not value:
+        return None
+
+    if isinstance(value, dict):
+        return dict(value)
+
+    return None
+
+
+def _event_field_path(parsed_event: ParsedYamlEvent, field_name: str) -> str:
+    """
+    Build a field path for a parsed YAML event field.
+
+    Args:
+        parsed_event (ParsedYamlEvent): Parsed YAML event.
+        field_name (str): Field name.
+
+    Returns:
+        str: Event field path.
+    """
+    return f"events[{parsed_event.source_index}].{field_name}"
 
 
 def _load_yaml_document(text: str) -> dict[str, Any]:
@@ -1145,6 +1587,9 @@ __all__ = [
     "SUPPORTED_SCHEMA_VERSION",
     "ScenarioYamlError",
     "ScenarioYamlValidationError",
+    "build_scenario_from_parsed_yaml",
+    "build_scenario_from_yaml",
+    "build_scenario_from_yaml_text",
     "load_scenario_yaml",
     "parse_scenario_yaml_document",
     "parse_scenario_yaml_text",

@@ -7,10 +7,12 @@ from pathlib import Path
 
 import pytest
 
+from log_generator.core.scenarios import build_benign_internal_web_scenario, build_local_account_misuse_web_scenario
 from log_generator.scenario_yaml import (
     DEFAULT_OUTPUT_FAMILIES,
     SUPPORTED_SCHEMA_VERSION,
     ScenarioYamlError,
+    build_scenario_from_yaml_text,
     load_scenario_yaml,
     parse_scenario_yaml_text,
 )
@@ -61,6 +63,113 @@ def assert_yaml_error_contains(text: str, expected: str) -> None:
     assert expected in str(error_info.value)
 
 
+def canonical_benign_yaml() -> str:
+    """
+    Build the canonical benign scenario YAML fixture text.
+
+    Returns:
+        str: Canonical benign scenario YAML.
+    """
+    return """
+schema_version: scenario/v0.1
+id: scenario-benign-internal-web
+name: Benign Internal Web Browsing
+description: Alice visits the internal Apache homepage from her normal workstation.
+seed: 1001
+environment:
+  id: linux-mini-lab
+  version: "0.1"
+time_range:
+  start: 2026-01-15T14:00:00Z
+  end: 2026-01-15T14:00:02Z
+output_families:
+  - generic-normalized
+events:
+  - id: evt-benign-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /
+    correlation_id: corr-benign-internal-web-001
+"""
+
+
+def canonical_misuse_yaml() -> str:
+    """
+    Build the canonical local account misuse scenario YAML fixture text.
+
+    Returns:
+        str: Canonical misuse scenario YAML.
+    """
+    return """
+schema_version: scenario/v0.1
+id: scenario-local-account-misuse-web
+name: Local Account Misuse and Suspicious Web Access
+description: Suspicious use of Alice's local account followed by admin browsing and archive download.
+seed: 2002
+environment:
+  id: linux-mini-lab
+  version: "0.1"
+time_range:
+  start: 2026-01-15T03:12:00Z
+  end: 2026-01-15T03:12:28Z
+output_families:
+  - generic-normalized
+events:
+  - id: evt-misuse-web-001
+    type: linux_local_login
+    at: +0s
+    actor: user-alice
+    target_host: linux-ws-01
+    login_method: local_console
+    metadata:
+      activity_classification: suspicious
+    correlation_id: corr-local-account-misuse-001
+  - id: evt-misuse-web-004
+    type: web_request
+    after: evt-misuse-web-001
+    delay: 18s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /admin
+    attack:
+      technique_id: T1087
+      technique_name: Account Discovery
+    correlation_id: corr-local-account-misuse-001
+  - id: evt-misuse-web-005
+    type: web_request
+    after: evt-misuse-web-004
+    delay: 10s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /admin/archive.tar.gz
+    attack:
+      technique_id: T1105
+      technique_name: Ingress Tool Transfer
+    correlation_id: corr-local-account-misuse-001
+"""
+
+
+def serialized_events_from_scenario(scenario) -> list[dict]:
+    """
+    Serialize a scenario's ordered events.
+
+    Args:
+        scenario: Scenario whose ordered events should be serialized.
+
+    Returns:
+        list[dict]: Serialized ordered source-neutral events.
+    """
+    return [event.to_dict() for event in scenario.ordered_events()]
+
+
 def test_parse_canonical_style_web_request_top_level_fields() -> None:
     """
     Verify a canonical-style web request scenario parses top-level fields and relative timing.
@@ -97,6 +206,71 @@ def test_parse_canonical_style_web_request_top_level_fields() -> None:
     assert parsed.events[0].event_id == "evt-benign-web-003"
     assert parsed.events[0].event_type == "web_request"
     assert parsed.events[0].timestamp == datetime(2026, 1, 15, 14, 0, 2, tzinfo=timezone.utc)
+
+
+def test_benign_yaml_converts_to_phase_1_canonical_scenario_events() -> None:
+    """
+    Verify canonical benign YAML expands through the Phase 1 scenario primitives.
+
+    Returns:
+        None: This test asserts exact event parity with the Python fixture.
+    """
+    yaml_scenario = build_scenario_from_yaml_text(canonical_benign_yaml())
+    fixture_scenario = build_benign_internal_web_scenario()
+
+    assert yaml_scenario.id == fixture_scenario.id
+    assert yaml_scenario.name == fixture_scenario.name
+    assert yaml_scenario.seed == fixture_scenario.seed
+    assert yaml_scenario.authored_event_count == 1
+    assert serialized_events_from_scenario(yaml_scenario) == serialized_events_from_scenario(fixture_scenario)
+
+
+def test_misuse_yaml_converts_to_phase_1_canonical_scenario_events() -> None:
+    """
+    Verify canonical misuse YAML expands through the Phase 1 scenario primitives.
+
+    Returns:
+        None: This test asserts exact event parity with the Python fixture.
+    """
+    yaml_scenario = build_scenario_from_yaml_text(canonical_misuse_yaml())
+    fixture_scenario = build_local_account_misuse_web_scenario()
+    yaml_events = serialized_events_from_scenario(yaml_scenario)
+
+    assert yaml_scenario.id == fixture_scenario.id
+    assert yaml_scenario.name == fixture_scenario.name
+    assert yaml_scenario.seed == fixture_scenario.seed
+    assert yaml_scenario.authored_event_count == 3
+    assert yaml_events == serialized_events_from_scenario(fixture_scenario)
+    assert yaml_events[4]["parent_event_id"] == "evt-misuse-web-003"
+    assert yaml_events[4]["metadata"] == {
+        "download_classification": "download",
+        "file_name": "archive.tar.gz",
+    }
+
+
+def test_yaml_conversion_generates_deterministic_correlation_id_when_omitted() -> None:
+    """
+    Verify YAML conversion derives stable correlation IDs for top-level activity.
+
+    Returns:
+        None: This test asserts deterministic generated correlation IDs directly.
+    """
+    scenario = build_scenario_from_yaml_text(
+        minimal_yaml(
+            """
+  - id: evt-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /
+"""
+        )
+    )
+
+    assert scenario.correlation_ids() == ("corr-scenario-yaml-test-001",)
 
 
 def test_environment_shorthand_uses_supported_builtin_version() -> None:
