@@ -382,7 +382,7 @@ def test_supported_duration_units_parse_predictably() -> None:
             """
   - id: evt-ms
     type: web_request
-    at: +500ms
+    at: +2500ms
     actor: user-alice
     source_host: linux-ws-01
     service: svc-web-http
@@ -408,7 +408,7 @@ def test_supported_duration_units_parse_predictably() -> None:
         ).replace("2026-01-15T14:10:00Z", "2026-01-15T16:00:00Z")
     )
 
-    assert parsed.events[0].timestamp == datetime(2026, 1, 15, 14, 0, 0, 500000, tzinfo=timezone.utc)
+    assert parsed.events[0].timestamp == datetime(2026, 1, 15, 14, 0, 2, 500000, tzinfo=timezone.utc)
     assert parsed.events[1].timestamp == datetime(2026, 1, 15, 14, 2, tzinfo=timezone.utc)
     assert parsed.events[2].timestamp == datetime(2026, 1, 15, 15, 0, tzinfo=timezone.utc)
 
@@ -686,4 +686,299 @@ def test_delay_without_after_is_rejected() -> None:
 """
         ),
         "events[0].delay: '1s' is invalid because delay may appear only with after",
+    )
+
+
+def test_unknown_user_is_rejected_by_yaml_environment_validation() -> None:
+    """
+    Verify YAML actor references must resolve through the environment.
+
+    Returns:
+        None: This test asserts validation error text directly.
+    """
+    assert_yaml_error_contains(
+        minimal_yaml(
+            """
+  - id: evt-benign-web-003
+    type: web_request
+    at: +2s
+    actor: user-missing
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /
+"""
+        ),
+        "events[0].actor: 'user-missing' is invalid because unknown user",
+    )
+
+
+def test_unknown_source_host_is_rejected_by_yaml_environment_validation() -> None:
+    """
+    Verify YAML source host references must resolve through the environment.
+
+    Returns:
+        None: This test asserts validation error text directly.
+    """
+    assert_yaml_error_contains(
+        minimal_yaml(
+            """
+  - id: evt-benign-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-99
+    service: svc-web-http
+    method: GET
+    path: /
+"""
+        ),
+        "events[0].source_host: 'linux-ws-99' is invalid because unknown host",
+    )
+
+
+def test_unknown_service_is_rejected_by_yaml_environment_validation() -> None:
+    """
+    Verify YAML service references must resolve through the environment.
+
+    Returns:
+        None: This test asserts validation error text directly.
+    """
+    assert_yaml_error_contains(
+        minimal_yaml(
+            """
+  - id: evt-benign-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-missing
+    method: GET
+    path: /
+"""
+        ),
+        "events[0].service: 'svc-web-missing' is invalid because unknown service",
+    )
+
+
+def test_invalid_login_host_is_rejected_by_yaml_environment_validation() -> None:
+    """
+    Verify successful local logins must target one of the user's valid login hosts.
+
+    Returns:
+        None: This test asserts validation error text directly.
+    """
+    assert_yaml_error_contains(
+        minimal_yaml(
+            """
+  - id: evt-login
+    type: linux_local_login
+    at: +0s
+    actor: user-alice
+    target_host: linux-ws-02
+    login_method: local_console
+"""
+        ),
+        "events[0].target_host: 'linux-ws-02' is invalid because user 'user-alice' cannot log in to 'linux-ws-02'",
+    )
+
+
+def test_web_request_to_non_http_service_is_rejected() -> None:
+    """
+    Verify web_request events cannot target non-HTTP services.
+
+    Returns:
+        None: This test asserts validation error text directly.
+    """
+    assert_yaml_error_contains(
+        minimal_yaml(
+            """
+  - id: evt-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-ssh
+    method: GET
+    path: /
+"""
+        ),
+        "events[0].service: 'svc-web-ssh' is invalid because web_request events must target an HTTP service",
+    )
+
+
+def test_bad_route_is_rejected_by_yaml_environment_validation() -> None:
+    """
+    Verify web request paths must match known service routes unless status_code is explicit.
+
+    Returns:
+        None: This test asserts validation error text directly.
+    """
+    assert_yaml_error_contains(
+        minimal_yaml(
+            """
+  - id: evt-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: POST
+    path: /admin/archive.tar.gz
+"""
+        ),
+        "route 'POST /admin/archive.tar.gz' is not defined for service 'svc-web-http'",
+    )
+
+
+def test_unknown_route_can_use_explicit_status_code() -> None:
+    """
+    Verify explicit status_code lets authors model an unknown HTTP route.
+
+    Returns:
+        None: This test asserts parsing succeeds directly.
+    """
+    parsed = parse_scenario_yaml_text(
+        minimal_yaml(
+            """
+  - id: evt-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: POST
+    path: /admin/archive.tar.gz
+    status_code: 404
+"""
+        )
+    )
+
+    assert parsed.events[0].raw["status_code"] == 404
+
+
+def test_invalid_path_is_rejected_by_yaml_environment_validation() -> None:
+    """
+    Verify web request paths must start with a slash.
+
+    Returns:
+        None: This test asserts validation error text directly.
+    """
+    assert_yaml_error_contains(
+        minimal_yaml(
+            """
+  - id: evt-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: admin
+"""
+        ),
+        "events[0].path: 'admin' is invalid because path must start with '/'",
+    )
+
+
+def test_invalid_status_code_range_is_rejected() -> None:
+    """
+    Verify explicit HTTP status codes must be in the valid range.
+
+    Returns:
+        None: This test asserts validation error text directly.
+    """
+    assert_yaml_error_contains(
+        minimal_yaml(
+            """
+  - id: evt-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /
+    status_code: 99
+"""
+        ),
+        "events[0].status_code: 99 is invalid because status_code must be between 100 and 599",
+    )
+
+
+def test_invalid_attack_technique_id_is_rejected() -> None:
+    """
+    Verify ATT&CK technique IDs use the supported simple T-number form.
+
+    Returns:
+        None: This test asserts validation error text directly.
+    """
+    assert_yaml_error_contains(
+        minimal_yaml(
+            """
+  - id: evt-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /
+    attack:
+      technique_id: T1105.001
+"""
+        ),
+        "events[0].attack.technique_id: 'T1105.001' is invalid because expected ATT&CK technique ID like 'T1105'",
+    )
+
+
+def test_unsupported_noise_profiles_are_rejected_explicitly() -> None:
+    """
+    Verify noise_profiles fails with the planned unsupported-feature message.
+
+    Returns:
+        None: This test asserts validation error text directly.
+    """
+    assert_yaml_error_contains(
+        minimal_yaml(
+            """
+  - id: evt-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /
+""",
+            extra_top_level="""
+noise_profiles:
+  - id: light-business-hours-web
+""",
+        ),
+        "noise_profiles is not supported yet",
+    )
+
+
+def test_generated_web_helpers_must_remain_inside_time_range() -> None:
+    """
+    Verify YAML validation rejects web requests whose generated helpers predate scenario start.
+
+    Returns:
+        None: This test asserts validation error text directly.
+    """
+    assert_yaml_error_contains(
+        minimal_yaml(
+            """
+  - id: evt-web-003
+    type: web_request
+    at: +1s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /
+"""
+        ),
+        "generated dns_lookup helper must stay inside time_range",
     )
