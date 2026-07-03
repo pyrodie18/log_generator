@@ -63,6 +63,23 @@ def assert_yaml_error_contains(text: str, expected: str) -> None:
     assert expected in str(error_info.value)
 
 
+def assert_yaml_build_error_contains(text: str, expected: str) -> None:
+    """
+    Assert building a scenario from YAML raises a validation error containing expected text.
+
+    Args:
+        text (str): YAML scenario text to build.
+        expected (str): Text expected in the validation error.
+
+    Returns:
+        None: This helper asserts the validation error message directly.
+    """
+    with pytest.raises(ScenarioYamlError) as error_info:
+        build_scenario_from_yaml_text(text)
+
+    assert expected in str(error_info.value)
+
+
 def canonical_benign_yaml() -> str:
     """
     Build the canonical benign scenario YAML fixture text.
@@ -154,6 +171,27 @@ events:
       technique_id: T1105
       technique_name: Ingress Tool Transfer
     correlation_id: corr-local-account-misuse-001
+attack_chain:
+  - id: step-admin-access
+    name: Admin page access
+    primary_event_id: evt-misuse-web-004
+    technique_id: T1087
+    technique_name: Account Discovery
+  - id: step-archive-download
+    name: Archive download
+    primary_event_id: evt-misuse-web-005
+    supporting_event_ids:
+      - evt-misuse-web-001
+      - evt-misuse-web-004
+    technique_id: T1105
+    technique_name: Ingress Tool Transfer
+answer_key:
+  - label: suspicious_internal_web_download
+    primary_event_id: evt-misuse-web-005
+    supporting_event_ids:
+      - evt-misuse-web-001
+      - evt-misuse-web-004
+    description: Suspicious local account use followed by admin page access and archive download.
 """
 
 
@@ -241,10 +279,43 @@ def test_misuse_yaml_converts_to_phase_1_canonical_scenario_events() -> None:
     assert yaml_scenario.seed == fixture_scenario.seed
     assert yaml_scenario.authored_event_count == 3
     assert yaml_events == serialized_events_from_scenario(fixture_scenario)
+    assert [record.to_dict() for record in yaml_scenario.answer_key] == [
+        record.to_dict() for record in fixture_scenario.answer_key
+    ]
     assert yaml_events[4]["parent_event_id"] == "evt-misuse-web-003"
     assert yaml_events[4]["metadata"] == {
         "download_classification": "download",
         "file_name": "archive.tar.gz",
+    }
+
+
+def test_answer_key_can_reference_generated_helper_event() -> None:
+    """
+    Verify answer-key references can target generated helper event IDs.
+
+    Returns:
+        None: This test asserts answer-key conversion directly.
+    """
+    scenario = build_scenario_from_yaml_text(
+        canonical_benign_yaml()
+        + """
+answer_key:
+  - label: benign_dns_helper
+    primary_event_id: evt-benign-web-001
+    supporting_event_ids:
+      - evt-benign-web-002
+      - evt-benign-web-003
+    description: The generated DNS helper for the benign web request.
+"""
+    )
+
+    assert scenario.answer_key[0].to_dict() == {
+        "scenario_id": "scenario-benign-internal-web",
+        "correlation_id": "corr-benign-internal-web-001",
+        "label": "benign_dns_helper",
+        "primary_event_id": "evt-benign-web-001",
+        "supporting_event_ids": ["evt-benign-web-002", "evt-benign-web-003"],
+        "description": "The generated DNS helper for the benign web request.",
     }
 
 
@@ -271,6 +342,84 @@ def test_yaml_conversion_generates_deterministic_correlation_id_when_omitted() -
     )
 
     assert scenario.correlation_ids() == ("corr-scenario-yaml-test-001",)
+
+
+def test_attack_chain_unknown_primary_event_is_rejected() -> None:
+    """
+    Verify attack-chain primary event references must resolve after expansion.
+
+    Returns:
+        None: This test asserts build-time validation error text directly.
+    """
+    assert_yaml_build_error_contains(
+        canonical_benign_yaml()
+        + """
+attack_chain:
+  - id: step-missing
+    name: Missing step
+    primary_event_id: evt-missing
+""",
+        "attack_chain[0].primary_event_id: 'evt-missing' is invalid because event reference does not resolve",
+    )
+
+
+def test_answer_key_unknown_supporting_event_is_rejected() -> None:
+    """
+    Verify answer-key supporting event references must resolve after expansion.
+
+    Returns:
+        None: This test asserts build-time validation error text directly.
+    """
+    assert_yaml_build_error_contains(
+        canonical_benign_yaml()
+        + """
+answer_key:
+  - label: bad_reference
+    primary_event_id: evt-benign-web-003
+    supporting_event_ids:
+      - evt-missing
+    description: Bad supporting event reference.
+""",
+        "answer_key[0].supporting_event_ids[0]: 'evt-missing' is invalid because event reference does not resolve",
+    )
+
+
+def test_answer_key_missing_required_field_is_rejected() -> None:
+    """
+    Verify answer-key records require the fields needed for ground-truth output.
+
+    Returns:
+        None: This test asserts build-time validation error text directly.
+    """
+    assert_yaml_build_error_contains(
+        canonical_benign_yaml()
+        + """
+answer_key:
+  - label: missing_description
+    primary_event_id: evt-benign-web-003
+""",
+        "answer_key[0].description: None is invalid because field is required",
+    )
+
+
+def test_attack_chain_invalid_technique_id_is_rejected() -> None:
+    """
+    Verify attack-chain technique IDs use the supported simple T-number form.
+
+    Returns:
+        None: This test asserts build-time validation error text directly.
+    """
+    assert_yaml_build_error_contains(
+        canonical_benign_yaml()
+        + """
+attack_chain:
+  - id: step-invalid-technique
+    name: Invalid technique
+    primary_event_id: evt-benign-web-003
+    technique_id: T1105.001
+""",
+        "attack_chain[0].technique_id: 'T1105.001' is invalid because expected ATT&CK technique ID like 'T1105'",
+    )
 
 
 def test_environment_shorthand_uses_supported_builtin_version() -> None:

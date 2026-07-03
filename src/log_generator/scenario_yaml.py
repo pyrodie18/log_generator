@@ -10,7 +10,14 @@ from typing import Any, Optional, Union
 
 from log_generator.core.environment import Environment, build_linux_mini_lab
 from log_generator.core.events import LinuxLocalLoginEvent, VALID_STATUSES, normalize_utc_timestamp
-from log_generator.core.scenarios import AuthoredEvent, AuthoredWebRequest, Scenario, expand_authored_events
+from log_generator.core.scenarios import (
+    AnswerKeyRecord,
+    AuthoredEvent,
+    AuthoredWebRequest,
+    Scenario,
+    ScenarioEvent,
+    expand_authored_events,
+)
 from log_generator.output.jsonl import validate_path_component
 
 
@@ -71,6 +78,24 @@ EVENT_TYPE_FIELDS = {
 SAFE_IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 DURATION_RE = re.compile(r"^\+?(?P<amount>\d+)(?P<unit>ms|s|m|h)$")
 ATTACK_TECHNIQUE_ID_RE = re.compile(r"^T\d+$")
+ATTACK_CHAIN_FIELDS = frozenset(
+    {
+        "id",
+        "name",
+        "primary_event_id",
+        "supporting_event_ids",
+        "technique_id",
+        "technique_name",
+    }
+)
+ANSWER_KEY_FIELDS = frozenset(
+    {
+        "label",
+        "primary_event_id",
+        "supporting_event_ids",
+        "description",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -298,6 +323,10 @@ def build_scenario_from_parsed_yaml(parsed: ParsedScenarioYaml) -> Scenario:
         environment=environment,
         authored_events=authored_events,
     )
+    metadata_errors = _validate_metadata_references(parsed, expanded_events)
+
+    if metadata_errors:
+        raise ScenarioYamlError(metadata_errors)
 
     return Scenario(
         id=parsed.scenario_id,
@@ -309,6 +338,7 @@ def build_scenario_from_parsed_yaml(parsed: ParsedScenarioYaml) -> Scenario:
         end_time=parsed.end_time,
         output_families=parsed.output_families,
         events=expanded_events,
+        answer_key=_build_answer_key_records(parsed, expanded_events),
         authored_event_count=len(parsed.events),
     )
 
@@ -370,6 +400,298 @@ def _build_authored_events(parsed: ParsedScenarioYaml) -> tuple[AuthoredEvent, .
         raise ScenarioYamlError(errors)
 
     return tuple(authored_events)
+
+
+def _validate_metadata_references(
+    parsed: ParsedScenarioYaml,
+    expanded_events: tuple[ScenarioEvent, ...],
+) -> list[ScenarioYamlValidationError]:
+    """
+    Validate attack-chain and answer-key references against expanded event IDs.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns metadata.
+        expanded_events (tuple[ScenarioEvent, ...]): Expanded source-neutral scenario events.
+
+    Returns:
+        list[ScenarioYamlValidationError]: Metadata validation errors.
+    """
+    errors: list[ScenarioYamlValidationError] = []
+    expanded_event_ids = {scenario_event.event.event_id for scenario_event in expanded_events}
+
+    for index, attack_step in enumerate(parsed.attack_chain):
+        _validate_attack_chain_step(parsed.scenario_id, index, attack_step, expanded_event_ids, errors)
+
+    for index, answer_key_record in enumerate(parsed.answer_key):
+        _validate_answer_key_record(parsed.scenario_id, index, answer_key_record, expanded_event_ids, errors)
+
+    return errors
+
+
+def _build_answer_key_records(
+    parsed: ParsedScenarioYaml,
+    expanded_events: tuple[ScenarioEvent, ...],
+) -> tuple[AnswerKeyRecord, ...]:
+    """
+    Build answer-key records from validated YAML metadata.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns answer-key metadata.
+        expanded_events (tuple[ScenarioEvent, ...]): Expanded source-neutral scenario events.
+
+    Returns:
+        tuple[AnswerKeyRecord, ...]: Answer-key records ready for metadata output.
+    """
+    events_by_id = {scenario_event.event.event_id: scenario_event.event for scenario_event in expanded_events}
+    answer_key_records = []
+
+    for record in parsed.answer_key:
+        primary_event_id = record["primary_event_id"]
+        primary_event = events_by_id[primary_event_id]
+
+        answer_key_records.append(
+            AnswerKeyRecord(
+                scenario_id=parsed.scenario_id,
+                correlation_id=primary_event.correlation_id,
+                label=record["label"],
+                primary_event_id=primary_event_id,
+                supporting_event_ids=tuple(record.get("supporting_event_ids", ())),
+                description=record["description"],
+            )
+        )
+
+    return tuple(answer_key_records)
+
+
+def _validate_attack_chain_step(
+    scenario_id: str,
+    index: int,
+    attack_step: dict[str, Any],
+    expanded_event_ids: set[str],
+    errors: list[ScenarioYamlValidationError],
+) -> None:
+    """
+    Validate one attack-chain step.
+
+    Args:
+        scenario_id (str): Scenario ID for validation errors.
+        index (int): Attack-chain item index.
+        attack_step (dict[str, Any]): Raw attack-chain step mapping.
+        expanded_event_ids (set[str]): Valid event IDs after expansion.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        None: The errors list is updated in place.
+    """
+    prefix = f"attack_chain[{index}]"
+
+    _validate_unknown_fields(attack_step, ATTACK_CHAIN_FIELDS, prefix, scenario_id, errors)
+    _required_metadata_string(attack_step, "id", prefix, scenario_id, errors)
+    _required_metadata_string(attack_step, "name", prefix, scenario_id, errors)
+    primary_event_id = _required_metadata_string(attack_step, "primary_event_id", prefix, scenario_id, errors)
+    supporting_event_ids = _optional_string_list(
+        attack_step, "supporting_event_ids", prefix, scenario_id, errors
+    )
+    _validate_optional_metadata_technique_id(attack_step, "technique_id", prefix, scenario_id, errors)
+
+    if primary_event_id is not None:
+        _validate_metadata_event_reference(
+            primary_event_id, f"{prefix}.primary_event_id", scenario_id, expanded_event_ids, errors
+        )
+
+    for supporting_index, supporting_event_id in enumerate(supporting_event_ids):
+        _validate_metadata_event_reference(
+            supporting_event_id,
+            f"{prefix}.supporting_event_ids[{supporting_index}]",
+            scenario_id,
+            expanded_event_ids,
+            errors,
+        )
+
+
+def _validate_answer_key_record(
+    scenario_id: str,
+    index: int,
+    answer_key_record: dict[str, Any],
+    expanded_event_ids: set[str],
+    errors: list[ScenarioYamlValidationError],
+) -> None:
+    """
+    Validate one answer-key record.
+
+    Args:
+        scenario_id (str): Scenario ID for validation errors.
+        index (int): Answer-key item index.
+        answer_key_record (dict[str, Any]): Raw answer-key mapping.
+        expanded_event_ids (set[str]): Valid event IDs after expansion.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        None: The errors list is updated in place.
+    """
+    prefix = f"answer_key[{index}]"
+
+    _validate_unknown_fields(answer_key_record, ANSWER_KEY_FIELDS, prefix, scenario_id, errors)
+    _required_metadata_string(answer_key_record, "label", prefix, scenario_id, errors)
+    primary_event_id = _required_metadata_string(
+        answer_key_record, "primary_event_id", prefix, scenario_id, errors
+    )
+    supporting_event_ids = _optional_string_list(
+        answer_key_record, "supporting_event_ids", prefix, scenario_id, errors
+    )
+    _required_metadata_string(answer_key_record, "description", prefix, scenario_id, errors)
+
+    if primary_event_id is not None:
+        _validate_metadata_event_reference(
+            primary_event_id, f"{prefix}.primary_event_id", scenario_id, expanded_event_ids, errors
+        )
+
+    for supporting_index, supporting_event_id in enumerate(supporting_event_ids):
+        _validate_metadata_event_reference(
+            supporting_event_id,
+            f"{prefix}.supporting_event_ids[{supporting_index}]",
+            scenario_id,
+            expanded_event_ids,
+            errors,
+        )
+
+
+def _validate_metadata_event_reference(
+    event_id: str,
+    field_path: str,
+    scenario_id: str,
+    expanded_event_ids: set[str],
+    errors: list[ScenarioYamlValidationError],
+) -> None:
+    """
+    Validate that a metadata event reference resolves after scenario expansion.
+
+    Args:
+        event_id (str): Event ID to validate.
+        field_path (str): Field path for validation errors.
+        scenario_id (str): Scenario ID for validation errors.
+        expanded_event_ids (set[str]): Valid event IDs after expansion.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        None: The errors list is updated in place.
+    """
+    if event_id not in expanded_event_ids:
+        errors.append(_error(scenario_id, field_path, event_id, "event reference does not resolve"))
+
+
+def _required_metadata_string(
+    values: dict[str, Any],
+    field_name: str,
+    prefix: str,
+    scenario_id: str,
+    errors: list[ScenarioYamlValidationError],
+) -> Optional[str]:
+    """
+    Read a required string field from metadata.
+
+    Args:
+        values (dict[str, Any]): Metadata mapping to read.
+        field_name (str): Field name to require.
+        prefix (str): Field path prefix.
+        scenario_id (str): Scenario ID for validation errors.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        Optional[str]: Field value when valid.
+    """
+    value = values.get(field_name)
+    field_path = f"{prefix}.{field_name}"
+
+    if value is None:
+        errors.append(_error(scenario_id, field_path, None, "field is required"))
+        return None
+
+    if not isinstance(value, str):
+        errors.append(_error(scenario_id, field_path, value, "expected string"))
+        return None
+
+    if not value:
+        errors.append(_error(scenario_id, field_path, value, "must not be empty"))
+        return None
+
+    return value
+
+
+def _optional_string_list(
+    values: dict[str, Any],
+    field_name: str,
+    prefix: str,
+    scenario_id: str,
+    errors: list[ScenarioYamlValidationError],
+) -> tuple[str, ...]:
+    """
+    Read an optional list of strings from metadata.
+
+    Args:
+        values (dict[str, Any]): Metadata mapping to read.
+        field_name (str): Field name to read.
+        prefix (str): Field path prefix.
+        scenario_id (str): Scenario ID for validation errors.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        tuple[str, ...]: String values when present and valid.
+    """
+    if field_name not in values or values[field_name] is None:
+        return ()
+
+    value = values[field_name]
+    field_path = f"{prefix}.{field_name}"
+
+    if not isinstance(value, list):
+        errors.append(_error(scenario_id, field_path, value, "expected list of strings"))
+        return ()
+
+    output = []
+
+    for index, item in enumerate(value):
+        if not isinstance(item, str):
+            errors.append(_error(scenario_id, f"{field_path}[{index}]", item, "expected string"))
+            continue
+
+        output.append(item)
+
+    return tuple(output)
+
+
+def _validate_optional_metadata_technique_id(
+    values: dict[str, Any],
+    field_name: str,
+    prefix: str,
+    scenario_id: str,
+    errors: list[ScenarioYamlValidationError],
+) -> None:
+    """
+    Validate an optional metadata-level ATT&CK technique ID.
+
+    Args:
+        values (dict[str, Any]): Metadata mapping to inspect.
+        field_name (str): Technique ID field name.
+        prefix (str): Field path prefix.
+        scenario_id (str): Scenario ID for validation errors.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        None: The errors list is updated in place.
+    """
+    if field_name not in values or values[field_name] is None:
+        return
+
+    value = values[field_name]
+    field_path = f"{prefix}.{field_name}"
+
+    if not isinstance(value, str):
+        errors.append(_error(scenario_id, field_path, value, "expected string"))
+        return
+
+    if ATTACK_TECHNIQUE_ID_RE.match(value) is None:
+        errors.append(_error(scenario_id, field_path, value, "expected ATT&CK technique ID like 'T1105'"))
 
 
 def _build_authored_web_request(
