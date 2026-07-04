@@ -18,12 +18,13 @@ from log_generator.core.scenarios import (
     ScenarioEvent,
     expand_authored_events,
 )
-from log_generator.output.jsonl import validate_path_component
+from log_generator.output.jsonl import SOURCE_SPECIFIC_OUTPUT_FAMILIES, validate_path_component
 from log_generator.output.manifest import write_output_manifest
 
 
 SUPPORTED_SCHEMA_VERSION = "scenario/v0.1"
 DEFAULT_OUTPUT_FAMILIES = ("generic-normalized",)
+SUPPORTED_OUTPUT_FAMILIES = frozenset(DEFAULT_OUTPUT_FAMILIES)
 SUPPORTED_EVENT_TYPES = frozenset({"web_request", "linux_local_login"})
 TOP_LEVEL_FIELDS = frozenset(
     {
@@ -1656,6 +1657,22 @@ def _parse_output_families(
             continue
 
         _validate_safe_identifier(output_family, field_path, scenario_id, errors)
+
+        if output_family in SOURCE_SPECIFIC_OUTPUT_FAMILIES:
+            errors.append(
+                _error(
+                    scenario_id,
+                    field_path,
+                    output_family,
+                    "source-specific output families are not supported in Phase 2",
+                )
+            )
+            continue
+
+        if output_family not in SUPPORTED_OUTPUT_FAMILIES:
+            errors.append(_error(scenario_id, field_path, output_family, "unsupported output family"))
+            continue
+
         output_families.append(output_family)
 
     return tuple(output_families)
@@ -2407,6 +2424,7 @@ __all__ = [
     "DEFAULT_OUTPUT_FAMILIES",
     "ParsedScenarioYaml",
     "ParsedYamlEvent",
+    "SUPPORTED_OUTPUT_FAMILIES",
     "SUPPORTED_SCHEMA_VERSION",
     "ScenarioYamlError",
     "ScenarioYamlValidationError",

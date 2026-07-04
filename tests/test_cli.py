@@ -155,7 +155,7 @@ def test_cli_generate_writes_benign_output_tree(tmp_path: Path, capsys) -> None:
 
     Args:
         tmp_path (Path): Pytest temporary directory.
-        capsys: Pytest stdout and stderr capture fixture.
+        capsys (CaptureFixture): Pytest stdout and stderr capture fixture.
 
     Returns:
         None: This test asserts generated files and command output directly.
@@ -197,7 +197,7 @@ def test_cli_generate_writes_misuse_ground_truth(tmp_path: Path, capsys) -> None
 
     Args:
         tmp_path (Path): Pytest temporary directory.
-        capsys: Pytest stdout and stderr capture fixture.
+        capsys (CaptureFixture): Pytest stdout and stderr capture fixture.
 
     Returns:
         None: This test asserts generated metadata directly.
@@ -236,7 +236,7 @@ def test_cli_generate_reports_validation_errors_without_tracebacks(tmp_path: Pat
 
     Args:
         tmp_path (Path): Pytest temporary directory.
-        capsys: Pytest stdout and stderr capture fixture.
+        capsys (CaptureFixture): Pytest stdout and stderr capture fixture.
 
     Returns:
         None: This test asserts command failure behavior directly.

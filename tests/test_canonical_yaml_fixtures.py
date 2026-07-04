@@ -6,7 +6,11 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from log_generator.core.scenarios import build_benign_internal_web_scenario, build_local_account_misuse_web_scenario
+from log_generator.core.scenarios import (
+    Scenario,
+    build_benign_internal_web_scenario,
+    build_local_account_misuse_web_scenario,
+)
 from log_generator.scenario_yaml import generate_from_yaml, load_scenario_from_yaml
 
 
@@ -41,12 +45,12 @@ def read_jsonl(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
-def serialize_ordered_events(scenario) -> list[dict]:
+def serialize_ordered_events(scenario: Scenario) -> list[dict]:
     """
     Serialize a scenario's ordered events.
 
     Args:
-        scenario: Scenario whose ordered events should be serialized.
+        scenario (Scenario): Scenario whose ordered events should be serialized.
 
     Returns:
         list[dict]: Serialized source-neutral events.

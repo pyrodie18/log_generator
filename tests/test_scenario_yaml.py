@@ -787,6 +787,64 @@ def test_unknown_top_level_field_is_rejected() -> None:
     )
 
 
+def test_source_specific_output_family_is_rejected_for_phase_2() -> None:
+    """
+    Verify source-specific output families fail explicitly in Phase 2.
+
+    Returns:
+        None: This test asserts validation error text directly.
+    """
+    assert_yaml_error_contains(
+        minimal_yaml(
+            """
+  - id: evt-benign-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /
+""",
+            extra_top_level="""
+output_families:
+  - generic-normalized
+  - zeek
+""",
+        ),
+        "output_families[1]: 'zeek' is invalid because source-specific output families are not supported in Phase 2",
+    )
+
+
+def test_unknown_output_family_is_rejected() -> None:
+    """
+    Verify unknown output families fail before generation.
+
+    Returns:
+        None: This test asserts validation error text directly.
+    """
+    assert_yaml_error_contains(
+        minimal_yaml(
+            """
+  - id: evt-benign-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /
+""",
+            extra_top_level="""
+output_families:
+  - generic-normalized
+  - custom-family
+""",
+        ),
+        "output_families[1]: 'custom-family' is invalid because unsupported output family",
+    )
+
+
 def test_unknown_event_field_is_rejected() -> None:
     """
     Verify unknown fields on supported event types are validation errors.
