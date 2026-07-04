@@ -310,6 +310,7 @@ Recommended common fields:
 - `source_host`: source host.
 - `destination_host`: destination host.
 - `source_ip`: source IP.
+- `source_port`: source port when a concrete flow has been assigned one.
 - `destination_ip`: destination IP.
 - `domain`: DNS, Windows, cloud, or identity domain.
 - `protocol`: protocol such as DNS, HTTP, HTTPS, SMB, Kerberos, SSH, or LDAP.
@@ -320,11 +321,18 @@ Recommended common fields:
 - `command_line`: command execution details.
 - `file`: path, size, hash, and classification metadata.
 - `auth_context`: authentication mechanism, realm, logon type, and credential outcome.
-- `network_context`: bytes, packets, direction, zone, NAT, and sensor visibility.
+- `network_context`: shared flow facts such as bytes, packets, direction, zone, NAT, and sensor visibility.
 - `attack_context`: optional ATT&CK tactic, technique, tool, stage, and objective.
 - `exercise_context`: ground-truth labels, hints, difficulty, and answer-key markers.
 
 Source-specific details should be produced by generators. For example, Zeek `uid`, Windows `EventID`, and firewall vendor action strings should not be required in the core event model.
+
+Some values are not authored by a scenario but are still source-neutral because multiple source generators must agree
+on them. Examples include client ephemeral source ports, normalized flow five-tuples, NAT translations, shared byte or
+packet estimates, HTTP user-agent strings, HTTP versions, and response sizes. These should be produced by deterministic
+source-neutral enrichment before source-specific generators run, either directly on expanded events or in immutable
+flow/request context linked to those events. Source-specific generators should consume that shared context rather than
+mutating the original event after they discover a missing field.
 
 Source-specific extension fields may be allowed under plugin-owned namespaces, such as:
 
@@ -1057,8 +1065,11 @@ Major tasks:
 
 - Allow YAML and Python scenarios to request `zeek`.
 - Implement Zeek TSV schema definitions and header rendering.
-- Implement deterministic Zeek-owned values such as `uid`, source ports, transaction IDs, durations, byte counts,
-  packet counts, DNS RTTs, TTLs, HTTP transaction depths, user agents, and response body lengths.
+- Add deterministic source-neutral enrichment for shared flow, DNS, and HTTP facts such as client source ports,
+  normalized flow keys, byte or packet estimates, DNS transaction context, HTTP user agents, HTTP versions, and
+  response sizes.
+- Implement deterministic Zeek-owned values such as `uid`, Zeek file IDs, Zeek connection state, Zeek history, and TSV
+  rendering details.
 - Implement Zeek `conn.log`, `dns.log`, and `http.log` mapping from existing source-neutral events.
 - Write Zeek files under `logs/zeek-sensor-01/zeek/`.
 - Add Zeek file entries and useful omitted-stream entries to the manifest.

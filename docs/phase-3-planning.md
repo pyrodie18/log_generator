@@ -27,8 +27,10 @@ Phase 3 includes:
 - Support for `output_families: [generic-normalized, zeek]` in YAML and Python scenarios.
 - A Zeek output package that writes native-style TSV files.
 - Generation of `conn.log`, `dns.log`, and `http.log` for traffic visible to `zeek-sensor-01`.
-- Deterministic Zeek-owned values such as `uid`, client source ports, transaction IDs, durations, byte counts, packet
-  counts, DNS RTTs, TTLs, HTTP transaction depths, user agents, and response body lengths.
+- Deterministic source-neutral enrichment for shared flow, DNS, and HTTP facts such as client source ports, normalized
+  flow keys, byte or packet estimates, DNS transaction context, HTTP user agents, HTTP versions, and response sizes.
+- Deterministic Zeek-owned values such as `uid`, Zeek file IDs, Zeek connection state, Zeek history, and TSV rendering
+  details.
 - Manifest file entries for generated Zeek files.
 - Manifest omitted-stream entries when requested Zeek streams have zero records.
 - Tests for canonical benign and misuse Zeek output.
@@ -58,7 +60,9 @@ Expected files or modules:
 - README usage notes for `output_families: [generic-normalized, zeek]`
 
 The exact module layout can follow the implementation, but Zeek-specific rendering should stay outside the core
-scenario and event modules. The source-neutral model should not learn Zeek field names.
+scenario and event modules. The source-neutral model should not learn Zeek field names. Shared flow facts that future
+firewall, proxy, Apache, or auditd generators may also need should be derived before source-specific writers run, not
+inside the first writer that happens to need them.
 
 ## Recommended Implementation Order
 
@@ -100,24 +104,31 @@ Acceptance criteria:
 - TSV rendering escapes or rejects values that cannot be represented safely.
 - Tests cover unset, empty, boolean, interval, and timestamp rendering.
 
-### Task 3: Add Deterministic Zeek Value Derivation
+### Task 3: Add Shared Flow Enrichment and Zeek Value Derivation
 
-Goal: generate stable Zeek-owned values without pushing Zeek-specific fields into source-neutral events.
+Goal: generate stable shared flow facts once, then generate Zeek-owned values without pushing Zeek-specific fields into
+source-neutral events.
 
 Implement:
 
+- Deterministic source-neutral flow keys for DNS and HTTP flows.
+- Stable client source port derivation per flow, exposed through shared flow context.
+- Shared byte or packet estimates where later firewall, proxy, or host generators must agree with Zeek.
+- Shared DNS response context such as transaction IDs, response intervals, answer TTLs, and flags when those values may
+  be needed by future DNS server logs.
+- Shared HTTP request context such as default user agent, HTTP version, response size, and MIME hints when those values
+  may be needed by future Apache or proxy generators.
 - Stable Zeek `uid` derivation per connection-like flow.
-- Stable client source port derivation per flow.
-- Stable DNS transaction ID derivation per DNS lookup.
-- Plausible deterministic durations, RTTs, TTLs, byte counts, packet counts, connection state, and history values.
-- HTTP transaction depth calculation for multiple requests sharing one connection.
-- Default HTTP version and user-agent values.
+- Plausible deterministic Zeek connection state and history values.
+- Zeek HTTP transaction depth calculation for multiple requests sharing one connection.
 - Status message derivation for common HTTP status codes used by canonical scenarios.
 
 Acceptance criteria:
 
 - Re-running the same scenario with the same seed produces byte-for-byte identical Zeek records, except deterministic
   header times when tests intentionally vary `generated_at`.
+- Zeek `conn.log`, `dns.log`, and `http.log` consume the same shared client source port for a flow.
+- The shared flow context can be passed to a future firewall generator without depending on Zeek output objects.
 - The first misuse HTTP request has transaction depth `1`.
 - The second misuse HTTP request reuses the same HTTP connection `uid` and has transaction depth `2`.
 - DNS and HTTP records share the same `uid` as their underlying `conn.log` records.
@@ -257,7 +268,7 @@ Required test groups:
 
 - YAML validation tests for supported and unsupported output families.
 - Unit tests for Zeek timestamp, scalar, set, vector, and header rendering.
-- Unit tests for deterministic Zeek `uid`, port, transaction ID, and byte-count derivation.
+- Unit tests for deterministic shared flow, DNS, and HTTP context plus Zeek `uid` derivation.
 - Canonical benign Zeek output tests.
 - Canonical misuse Zeek output tests.
 - Manifest tests for generic-only and generic-plus-Zeek output.
@@ -294,12 +305,14 @@ flake8 --max-line-length=120 .
 | Header times | Derive from `generated_at` when available | Keeps test output reproducible. |
 | Sensor selection | Use `zeek-sensor-01` only | Keeps Phase 3 scoped to `linux-mini-lab`. |
 | HTTP connection reuse | Reuse connection by scenario, source host, service, correlation, and destination | Supports the canonical misuse two-request sequence. |
+| Shared flow facts | Derive before source-specific writers run | Keeps Zeek, future firewall, proxy, and host logs consistent. |
 
 ## Risks and Mitigations
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
 | Zeek fields leak into source-neutral events | Core model becomes source-specific | Keep all Zeek derivation in `log_generator.output.zeek`. |
+| Shared flow facts are generated inside Zeek | Later firewall or proxy generators disagree with Zeek records | Add a source-neutral enrichment step for ports, flow keys, and shared request facts before Zeek rendering. |
 | Generated `uid` relationships drift between streams | Zeek files become internally inconsistent | Test DNS and HTTP `uid` linkage against `conn.log`. |
 | Byte and packet counts look arbitrary | Output is less useful for analysts | Use deterministic, documented heuristics based on method, status, and route class. |
 | Manifest changes break generic-only output | Existing users regress | Preserve current generic-only tests and add mixed-family tests. |

@@ -166,6 +166,25 @@ Examples:
 - `query_name`
 - `resolved_addresses`
 
+### Shared Derived Context
+
+Some fields are not authored by a scenario, but they are still source-neutral because multiple source-specific
+generators must agree on them. These values should be created by deterministic expansion or enrichment before
+source-specific generators run.
+
+Examples:
+
+- Client ephemeral source ports for concrete network flows.
+- Normalized flow keys or five-tuples.
+- NAT translations when the environment models NAT.
+- Shared byte and packet estimates when several sources observe the same flow.
+- HTTP user-agent, HTTP version, response size, and other request facts that may appear in Zeek, Apache, proxy, or
+  firewall-adjacent records.
+
+Shared derived context may live directly on expanded events or in an immutable sidecar object linked by event ID,
+correlation ID, or flow ID. Source-specific generators should consume this context, not mutate the original event after
+the first generator notices a missing value.
+
 ### Generator-Owned Fields
 
 Generator-owned fields are created by source-specific generators. They should not be required in source-neutral events.
@@ -174,7 +193,7 @@ Examples:
 
 - Zeek `uid`
 - Zeek connection state rendering
-- Apache byte counts
+- Apache source-native size rendering when it is not backed by shared HTTP response size
 - Apache combined-log user agent text
 - auditd serial numbers
 - Firewall policy names, rule numbers, action strings, and NAT renderings
