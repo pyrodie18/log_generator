@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 import re
-from typing import Any, Optional, Union
+from typing import Any, Mapping, Optional, Union
 
 from log_generator.core.environment import Environment, build_linux_mini_lab
 from log_generator.core.events import LinuxLocalLoginEvent, VALID_STATUSES, normalize_utc_timestamp
@@ -19,6 +19,7 @@ from log_generator.core.scenarios import (
     expand_authored_events,
 )
 from log_generator.output.jsonl import validate_path_component
+from log_generator.output.manifest import write_output_manifest
 
 
 SUPPORTED_SCHEMA_VERSION = "scenario/v0.1"
@@ -177,66 +178,141 @@ class ParsedScenarioYaml:
     metadata: Optional[dict[str, Any]] = None
 
 
-def load_scenario_yaml(path: Path) -> ParsedScenarioYaml:
+EnvironmentRegistry = Mapping[str, Environment]
+
+
+def load_scenario_yaml(
+    path: Path,
+    environment_registry: Optional[EnvironmentRegistry] = None,
+) -> ParsedScenarioYaml:
     """
     Load and validate a single YAML scenario document from disk.
 
     Args:
         path (Path): YAML scenario file to read.
+        environment_registry (Optional[EnvironmentRegistry]): Environment registry overrides.
 
     Returns:
         ParsedScenarioYaml: Parsed scenario with resolved top-level metadata and event timing.
     """
-    return parse_scenario_yaml_text(path.read_text(encoding="utf-8"))
+    return parse_scenario_yaml_text(
+        path.read_text(encoding="utf-8"),
+        environment_registry=environment_registry,
+    )
 
 
-def build_scenario_from_yaml(path: Path) -> Scenario:
+def build_scenario_from_yaml(
+    path: Path,
+    environment_registry: Optional[EnvironmentRegistry] = None,
+) -> Scenario:
     """
     Load a YAML scenario file and convert it into an expanded source-neutral scenario.
 
     Args:
         path (Path): YAML scenario file to read.
+        environment_registry (Optional[EnvironmentRegistry]): Environment registry overrides.
 
     Returns:
         Scenario: Expanded source-neutral scenario.
     """
-    return build_scenario_from_parsed_yaml(load_scenario_yaml(path))
+    return load_scenario_from_yaml(path, environment_registry=environment_registry)
 
 
-def parse_scenario_yaml_text(text: str) -> ParsedScenarioYaml:
+def load_scenario_from_yaml(
+    path: Path,
+    environment_registry: Optional[EnvironmentRegistry] = None,
+) -> Scenario:
+    """
+    Load a YAML scenario file and return an expanded source-neutral scenario.
+
+    Args:
+        path (Path): YAML scenario file to read.
+        environment_registry (Optional[EnvironmentRegistry]): Environment registry overrides.
+
+    Returns:
+        Scenario: Expanded source-neutral scenario.
+    """
+    parsed = load_scenario_yaml(path, environment_registry=environment_registry)
+
+    return build_scenario_from_parsed_yaml(parsed, environment_registry=environment_registry)
+
+
+def generate_from_yaml(
+    path: Path,
+    output_root: Path,
+    run_id: Optional[str] = None,
+    generated_at: Optional[datetime] = None,
+    environment_registry: Optional[EnvironmentRegistry] = None,
+) -> Path:
+    """
+    Generate the generic output tree from a YAML scenario file.
+
+    Args:
+        path (Path): YAML scenario file to load.
+        output_root (Path): Root output directory to write.
+        run_id (Optional[str]): Run ID to include in the manifest. A deterministic default is used when omitted.
+        generated_at (Optional[datetime]): UTC generation timestamp to include in the manifest.
+        environment_registry (Optional[EnvironmentRegistry]): Environment registry overrides.
+
+    Returns:
+        Path: Path to the written manifest file.
+    """
+    scenario = load_scenario_from_yaml(path, environment_registry=environment_registry)
+
+    if run_id is None:
+        run_id = _default_run_id(scenario)
+
+    return write_output_manifest(output_root, (scenario,), run_id=run_id, generated_at=generated_at)
+
+
+def parse_scenario_yaml_text(
+    text: str,
+    environment_registry: Optional[EnvironmentRegistry] = None,
+) -> ParsedScenarioYaml:
     """
     Parse and validate a single YAML scenario document from text.
 
     Args:
         text (str): YAML scenario document text.
+        environment_registry (Optional[EnvironmentRegistry]): Environment registry overrides.
 
     Returns:
         ParsedScenarioYaml: Parsed scenario with resolved top-level metadata and event timing.
     """
     document = _load_yaml_document(text)
 
-    return parse_scenario_yaml_document(document)
+    return parse_scenario_yaml_document(document, environment_registry=environment_registry)
 
 
-def build_scenario_from_yaml_text(text: str) -> Scenario:
+def build_scenario_from_yaml_text(
+    text: str,
+    environment_registry: Optional[EnvironmentRegistry] = None,
+) -> Scenario:
     """
     Parse YAML scenario text and convert it into an expanded source-neutral scenario.
 
     Args:
         text (str): YAML scenario document text.
+        environment_registry (Optional[EnvironmentRegistry]): Environment registry overrides.
 
     Returns:
         Scenario: Expanded source-neutral scenario.
     """
-    return build_scenario_from_parsed_yaml(parse_scenario_yaml_text(text))
+    parsed = parse_scenario_yaml_text(text, environment_registry=environment_registry)
+
+    return build_scenario_from_parsed_yaml(parsed, environment_registry=environment_registry)
 
 
-def parse_scenario_yaml_document(document: dict[str, Any]) -> ParsedScenarioYaml:
+def parse_scenario_yaml_document(
+    document: dict[str, Any],
+    environment_registry: Optional[EnvironmentRegistry] = None,
+) -> ParsedScenarioYaml:
     """
     Validate a parsed YAML mapping and return a structured scenario document.
 
     Args:
         document (dict[str, Any]): Parsed YAML mapping.
+        environment_registry (Optional[EnvironmentRegistry]): Environment registry overrides.
 
     Returns:
         ParsedScenarioYaml: Parsed scenario with resolved top-level metadata and event timing.
@@ -262,7 +338,12 @@ def parse_scenario_yaml_document(document: dict[str, Any]) -> ParsedScenarioYaml
 
     name = _required_string(document, "name", scenario_id, errors)
     seed = _required_integer(document, "seed", scenario_id, errors)
-    environment_id, environment_version = _parse_environment(document.get("environment"), scenario_id, errors)
+    environment_id, environment_version = _parse_environment(
+        document.get("environment"),
+        scenario_id,
+        errors,
+        environment_registry=environment_registry,
+    )
     start_time, end_time = _parse_time_range(document.get("time_range"), scenario_id, errors)
     output_families = _parse_output_families(document.get("output_families"), scenario_id, errors)
     events = _parse_events(document.get("events"), scenario_id, start_time, end_time, errors)
@@ -291,7 +372,10 @@ def parse_scenario_yaml_document(document: dict[str, Any]) -> ParsedScenarioYaml
         metadata=metadata,
     )
 
-    environment_errors = _validate_parsed_scenario_environment(parsed)
+    environment_errors = _validate_parsed_scenario_environment(
+        parsed,
+        environment_registry=environment_registry,
+    )
 
     if environment_errors:
         raise ScenarioYamlError(environment_errors)
@@ -299,17 +383,21 @@ def parse_scenario_yaml_document(document: dict[str, Any]) -> ParsedScenarioYaml
     return parsed
 
 
-def build_scenario_from_parsed_yaml(parsed: ParsedScenarioYaml) -> Scenario:
+def build_scenario_from_parsed_yaml(
+    parsed: ParsedScenarioYaml,
+    environment_registry: Optional[EnvironmentRegistry] = None,
+) -> Scenario:
     """
     Convert a parsed YAML scenario into the existing source-neutral Scenario model.
 
     Args:
         parsed (ParsedScenarioYaml): Structurally valid parsed YAML scenario.
+        environment_registry (Optional[EnvironmentRegistry]): Environment registry overrides.
 
     Returns:
         Scenario: Expanded source-neutral scenario.
     """
-    environment = _lookup_environment(parsed.environment_id)
+    environment = _lookup_environment(parsed.environment_id, environment_registry=environment_registry)
 
     if environment is None:
         raise ScenarioYamlError(
@@ -1011,17 +1099,21 @@ def _event_field_path(parsed_event: ParsedYamlEvent, field_name: str) -> str:
     return f"events[{parsed_event.source_index}].{field_name}"
 
 
-def _validate_parsed_scenario_environment(parsed: ParsedScenarioYaml) -> list[ScenarioYamlValidationError]:
+def _validate_parsed_scenario_environment(
+    parsed: ParsedScenarioYaml,
+    environment_registry: Optional[EnvironmentRegistry] = None,
+) -> list[ScenarioYamlValidationError]:
     """
     Validate parsed YAML events against the referenced environment.
 
     Args:
         parsed (ParsedScenarioYaml): Parsed YAML scenario to validate.
+        environment_registry (Optional[EnvironmentRegistry]): Environment registry overrides.
 
     Returns:
         list[ScenarioYamlValidationError]: Environment-aware validation errors.
     """
-    environment = _lookup_environment(parsed.environment_id)
+    environment = _lookup_environment(parsed.environment_id, environment_registry=environment_registry)
 
     if environment is None:
         return [_error(parsed.scenario_id, "environment.id", parsed.environment_id, "unknown environment")]
@@ -1433,6 +1525,7 @@ def _parse_environment(
     value: Any,
     scenario_id: Optional[str],
     errors: list[ScenarioYamlValidationError],
+    environment_registry: Optional[EnvironmentRegistry] = None,
 ) -> tuple[Optional[str], Optional[str]]:
     """
     Parse and validate the top-level environment reference.
@@ -1441,6 +1534,7 @@ def _parse_environment(
         value (Any): Raw environment field value.
         scenario_id (Optional[str]): Scenario ID for validation errors.
         errors (list[ScenarioYamlValidationError]): Validation errors to update.
+        environment_registry (Optional[EnvironmentRegistry]): Environment registry overrides.
 
     Returns:
         tuple[Optional[str], Optional[str]]: Environment ID and version when valid enough to continue.
@@ -1451,7 +1545,7 @@ def _parse_environment(
 
     if isinstance(value, str):
         environment_id = value
-        environment = _lookup_environment(environment_id)
+        environment = _lookup_environment(environment_id, environment_registry=environment_registry)
 
         if environment is None:
             errors.append(_error(scenario_id, "environment", value, "unknown environment"))
@@ -1471,7 +1565,7 @@ def _parse_environment(
     if environment_id is None:
         return None, environment_version
 
-    environment = _lookup_environment(environment_id)
+    environment = _lookup_environment(environment_id, environment_registry=environment_registry)
 
     if environment is None:
         errors.append(_error(scenario_id, "environment.id", environment_id, "unknown environment"))
@@ -2214,20 +2308,40 @@ def _require_mapping(
         errors.append(_error(scenario_id, field_path, value, "expected mapping"))
 
 
-def _lookup_environment(environment_id: str) -> Optional[Environment]:
+def _lookup_environment(
+    environment_id: str,
+    environment_registry: Optional[EnvironmentRegistry] = None,
+) -> Optional[Environment]:
     """
-    Look up a supported built-in environment.
+    Look up an environment from caller registry or supported built-ins.
 
     Args:
         environment_id (str): Environment identifier to resolve.
+        environment_registry (Optional[EnvironmentRegistry]): Environment registry overrides.
 
     Returns:
         Optional[Environment]: Matching environment when supported.
     """
+    if environment_registry is not None and environment_id in environment_registry:
+        return environment_registry[environment_id]
+
     if environment_id == "linux-mini-lab":
         return build_linux_mini_lab()
 
     return None
+
+
+def _default_run_id(scenario: Scenario) -> str:
+    """
+    Build a deterministic default run ID for a YAML-generated scenario.
+
+    Args:
+        scenario (Scenario): Scenario being generated.
+
+    Returns:
+        str: Stable run ID.
+    """
+    return f"run-{scenario.id}"
 
 
 def _scenario_id_for_errors(document: Any) -> Optional[str]:
@@ -2299,7 +2413,9 @@ __all__ = [
     "build_scenario_from_parsed_yaml",
     "build_scenario_from_yaml",
     "build_scenario_from_yaml_text",
+    "generate_from_yaml",
     "load_scenario_yaml",
+    "load_scenario_from_yaml",
     "parse_scenario_yaml_document",
     "parse_scenario_yaml_text",
 ]

@@ -2,18 +2,23 @@
 Tests for Phase 2 YAML scenario parsing and structural validation.
 """
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 
 import pytest
 
+from log_generator.core.environment import build_linux_mini_lab
 from log_generator.core.scenarios import build_benign_internal_web_scenario, build_local_account_misuse_web_scenario
 from log_generator.scenario_yaml import (
     DEFAULT_OUTPUT_FAMILIES,
     SUPPORTED_SCHEMA_VERSION,
     ScenarioYamlError,
     build_scenario_from_yaml_text,
+    generate_from_yaml,
     load_scenario_yaml,
+    load_scenario_from_yaml,
     parse_scenario_yaml_text,
 )
 
@@ -208,6 +213,32 @@ def serialized_events_from_scenario(scenario) -> list[dict]:
     return [event.to_dict() for event in scenario.ordered_events()]
 
 
+def read_json(path: Path) -> dict:
+    """
+    Read a JSON file.
+
+    Args:
+        path (Path): JSON file to read.
+
+    Returns:
+        dict: Parsed JSON object.
+    """
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    """
+    Read a JSON Lines file.
+
+    Args:
+        path (Path): JSON Lines file to read.
+
+    Returns:
+        list[dict]: Parsed JSON records.
+    """
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
 def test_parse_canonical_style_web_request_top_level_fields() -> None:
     """
     Verify a canonical-style web request scenario parses top-level fields and relative timing.
@@ -317,6 +348,102 @@ answer_key:
         "supporting_event_ids": ["evt-benign-web-002", "evt-benign-web-003"],
         "description": "The generated DNS helper for the benign web request.",
     }
+
+
+def test_load_scenario_from_yaml_returns_expanded_scenario(tmp_path: Path) -> None:
+    """
+    Verify the Task 8 load API returns an expanded scenario without writing output.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory.
+
+    Returns:
+        None: This test asserts loaded scenario details directly.
+    """
+    scenario_path = tmp_path / "benign.yaml"
+    scenario_path.write_text(canonical_benign_yaml(), encoding="utf-8")
+
+    scenario = load_scenario_from_yaml(scenario_path)
+
+    assert scenario.id == "scenario-benign-internal-web"
+    assert scenario.event_ids() == (
+        "evt-benign-web-001",
+        "evt-benign-web-002",
+        "evt-benign-web-003",
+    )
+    assert not (tmp_path / "manifest.json").exists()
+
+
+def test_generate_from_yaml_writes_manifest_and_generic_output(tmp_path: Path) -> None:
+    """
+    Verify the Task 8 generate API writes the complete generic output tree.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory.
+
+    Returns:
+        None: This test asserts generated files and manifest metadata directly.
+    """
+    scenario_path = tmp_path / "misuse.yaml"
+    output_root = tmp_path / "output"
+    scenario_path.write_text(canonical_misuse_yaml(), encoding="utf-8")
+
+    manifest_path = generate_from_yaml(
+        scenario_path,
+        output_root,
+        run_id="run-yaml-misuse",
+        generated_at=datetime(2026, 1, 15, 3, 12, 29, tzinfo=timezone.utc),
+    )
+    manifest = read_json(manifest_path)
+    events = read_jsonl(output_root / "logs" / "source-neutral-core" / "generic-normalized" / "events.jsonl")
+    ground_truth = read_jsonl(output_root / "metadata" / "ground-truth.jsonl")
+
+    assert manifest_path == output_root / "manifest.json"
+    assert manifest["run"]["run_id"] == "run-yaml-misuse"
+    assert manifest["generated_at"] == "2026-01-15T03:12:29+00:00"
+    assert manifest["files"][0]["record_count"] == 5
+    assert len(events) == 5
+    assert ground_truth[0]["label"] == "suspicious_internal_web_download"
+
+
+def test_generate_from_yaml_uses_deterministic_default_run_id(tmp_path: Path) -> None:
+    """
+    Verify omitted run_id uses a deterministic scenario-based default.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory.
+
+    Returns:
+        None: This test asserts manifest run metadata directly.
+    """
+    scenario_path = tmp_path / "benign.yaml"
+    output_root = tmp_path / "output"
+    scenario_path.write_text(canonical_benign_yaml(), encoding="utf-8")
+
+    manifest_path = generate_from_yaml(
+        scenario_path,
+        output_root,
+        generated_at=datetime(2026, 1, 15, 14, 0, 3, tzinfo=timezone.utc),
+    )
+    manifest = read_json(manifest_path)
+
+    assert manifest["run"]["run_id"] == "run-scenario-benign-internal-web"
+
+
+def test_yaml_api_accepts_environment_registry_override() -> None:
+    """
+    Verify callers can provide an environment registry for versioned environment resolution.
+
+    Returns:
+        None: This test asserts custom registry behavior directly.
+    """
+    custom_environment = replace(build_linux_mini_lab(), version="9.9")
+    scenario = build_scenario_from_yaml_text(
+        canonical_benign_yaml().replace('version: "0.1"', 'version: "9.9"'),
+        environment_registry={custom_environment.id: custom_environment},
+    )
+
+    assert scenario.environment_version == "9.9"
 
 
 def test_yaml_conversion_generates_deterministic_correlation_id_when_omitted() -> None:
