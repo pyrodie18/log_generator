@@ -1,0 +1,70 @@
+schema_version: scenario/v0.1
+id: scenario-local-account-misuse-web
+name: Local Account Misuse and Suspicious Web Access
+description: Suspicious use of Alice's local account followed by admin browsing and archive download.
+seed: 2002
+environment:
+  id: linux-mini-lab
+  version: "0.1"
+time_range:
+  start: 2026-01-15T03:12:00Z
+  end: 2026-01-15T03:12:28Z
+output_families:
+  - generic-normalized
+events:
+  - id: evt-misuse-web-001
+    type: linux_local_login
+    at: +0s
+    actor: user-alice
+    target_host: linux-ws-01
+    login_method: local_console
+    metadata:
+      activity_classification: suspicious
+    correlation_id: corr-local-account-misuse-001
+  - id: evt-misuse-web-004
+    type: web_request
+    after: evt-misuse-web-001
+    delay: 18s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /admin
+    attack:
+      technique_id: T1087
+      technique_name: Account Discovery
+    correlation_id: corr-local-account-misuse-001
+  - id: evt-misuse-web-005
+    type: web_request
+    after: evt-misuse-web-004
+    delay: 10s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /admin/archive.tar.gz
+    attack:
+      technique_id: T1105
+      technique_name: Ingress Tool Transfer
+    correlation_id: corr-local-account-misuse-001
+attack_chain:
+  - id: step-admin-access
+    name: Admin page access
+    primary_event_id: evt-misuse-web-004
+    technique_id: T1087
+    technique_name: Account Discovery
+  - id: step-archive-download
+    name: Archive download
+    primary_event_id: evt-misuse-web-005
+    supporting_event_ids:
+      - evt-misuse-web-001
+      - evt-misuse-web-004
+    technique_id: T1105
+    technique_name: Ingress Tool Transfer
+answer_key:
+  - label: suspicious_internal_web_download
+    primary_event_id: evt-misuse-web-005
+    supporting_event_ids:
+      - evt-misuse-web-001
+      - evt-misuse-web-004
+    description: Suspicious local account use followed by admin page access and archive download.

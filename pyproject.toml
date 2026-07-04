@@ -19,6 +19,9 @@ dependencies = [
     "PyYAML>=6.0",
 ]
 
+[project.scripts]
+log-generator = "log_generator.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

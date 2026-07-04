@@ -1,0 +1,23 @@
+schema_version: scenario/v0.1
+id: scenario-benign-internal-web
+name: Benign Internal Web Browsing
+description: Alice visits the internal Apache homepage from her normal workstation.
+seed: 1001
+environment:
+  id: linux-mini-lab
+  version: "0.1"
+time_range:
+  start: 2026-01-15T14:00:00Z
+  end: 2026-01-15T14:00:02Z
+output_families:
+  - generic-normalized
+events:
+  - id: evt-benign-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /
+    correlation_id: corr-benign-internal-web-001
