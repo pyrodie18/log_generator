@@ -113,21 +113,21 @@ Minimum field target:
 | `ts` | `network_connection.timestamp`, rendered as epoch seconds. |
 | `uid` | Generator-owned stable Zeek connection ID. |
 | `id.orig_h` | Source host IP from expanded `network_connection.source_ip`. |
-| `id.orig_p` | Shared derived client source port for the concrete flow. |
+| `id.orig_p` | Authored or shared-enriched client source port for the concrete flow. |
 | `id.resp_h` | Destination IP from expanded `network_connection.destination_ip`. |
 | `id.resp_p` | Destination port from expanded `network_connection.destination_port`. |
 | `proto` | Transport protocol, such as `tcp` or `udp`. |
 | `service` | Confirmed application protocol, such as `http` or `dns`, when known. |
-| `duration` | Shared derived flow duration when available; otherwise Zeek-owned plausible interval. |
-| `orig_bytes` | Shared derived originator payload byte count when available. |
-| `resp_bytes` | Shared derived responder payload byte count when available. |
+| `duration` | Authored or shared-enriched flow duration when available; otherwise Zeek-owned plausible interval. |
+| `orig_bytes` | Authored or shared-enriched originator payload byte count when available. |
+| `resp_bytes` | Authored or shared-enriched responder payload byte count when available. |
 | `conn_state` | Generator-owned Zeek state, usually `SF` for successful complete TCP sessions. |
 | `local_orig` | Derived from `Site::local_nets` equivalent; `T` for lab-originated canonical traffic. |
 | `local_resp` | Derived from `Site::local_nets` equivalent; `T` for internal lab responders. |
 | `missed_bytes` | `0` for clean synthetic MVP traffic. |
 | `history` | Generator-owned plausible packet history, such as a clean TCP handshake and close sequence. |
-| `orig_pkts` / `resp_pkts` | Shared derived packet counts when available. |
-| `orig_ip_bytes` / `resp_ip_bytes` | Shared derived IP byte counts consistent with payload counts when available. |
+| `orig_pkts` / `resp_pkts` | Authored or shared-enriched packet counts when available. |
+| `orig_ip_bytes` / `resp_ip_bytes` | Authored or shared-enriched IP byte counts consistent with payload counts when available. |
 | `tunnel_parents` | `-` unless a later tunnel event type exists. |
 | `ip_proto` | Numeric IP protocol, such as `6` for TCP and `17` for UDP. |
 
@@ -137,7 +137,8 @@ Implementation notes:
 - A `dns_lookup` that produces `dns.log` must also produce the underlying UDP `conn.log` record for that DNS flow.
 - Zeek `uid`, `conn_state`, and `history` are Zeek-generator fields.
 - Client source ports, flow keys, and any byte or packet estimates that future firewall or proxy generators must share
-  should come from deterministic source-neutral flow enrichment before Zeek rendering.
+  should come from authored shared context when provided, then deterministic source-neutral flow enrichment for any
+  omitted values before Zeek rendering.
 - The source-neutral model should not require any Zeek `conn.log` field beyond the existing network event facts.
 
 ## `dns.log` Minimum Field Set
@@ -152,27 +153,27 @@ Minimum field target:
 | `ts` | `dns_lookup.timestamp`, rendered as epoch seconds. |
 | `uid` | Zeek connection ID for the DNS flow. |
 | `id.orig_h` | Source host IP. |
-| `id.orig_p` | Shared derived client source port for the DNS flow. |
+| `id.orig_p` | Authored or shared-enriched client source port for the DNS flow. |
 | `id.resp_h` | Resolver IP, `10.10.20.53` for `lab-dns-01`. |
 | `id.resp_p` | Resolver port, `53`. |
 | `proto` | `udp` for the MVP DNS service. |
-| `trans_id` | Shared DNS context 16-bit transaction ID. |
-| `rtt` | Shared DNS context plausible response interval. |
+| `trans_id` | Authored or shared-enriched DNS context 16-bit transaction ID. |
+| `rtt` | Authored or shared-enriched DNS context plausible response interval. |
 | `query` | `dns_lookup.query_name`. |
 | `qclass` / `qclass_name` | `1` / `C_IN` for ordinary internet-class queries. |
 | `qtype` / `qtype_name` | DNS type number and name, such as `1` / `A`. |
 | `rcode` / `rcode_name` | `0` / `NOERROR` for successful canonical lookups. |
-| `AA`, `TC`, `RD`, `RA`, `Z` | Shared DNS context flags with deterministic defaults. |
+| `AA`, `TC`, `RD`, `RA`, `Z` | Authored or shared-enriched DNS context flags. |
 | `answers` | `dns_lookup.resolved_addresses` for successful responses. |
-| `TTLs` | Shared DNS context answer TTL intervals. |
+| `TTLs` | Authored or shared-enriched DNS context answer TTL intervals. |
 | `rejected` | `F` for successful canonical lookups. |
 
 Implementation notes:
 
 - Failed lookups should populate `rcode` and `rcode_name` consistently and leave successful answers unset.
 - The DNS `uid` must match the `uid` in the underlying UDP `conn.log` record.
-- DNS transaction IDs, RTTs, flags, source ports, and TTLs should come from shared DNS or flow enrichment when future
-  DNS server logs need to agree with Zeek.
+- DNS transaction IDs, RTTs, flags, source ports, and TTLs should come from authored shared context when provided, then
+  shared DNS or flow enrichment for omitted values when future DNS server logs need to agree with Zeek.
 - Optional fields such as `auth`, `addl`, and `original_query` depend on policy scripts and should be omitted from
   the MVP target unless the generator explicitly models those scripts.
 
@@ -196,10 +197,10 @@ Minimum field target:
 | `host` | Service DNS name, such as `web-server-01.internal`. |
 | `uri` | `path` plus optional query string. |
 | `referrer` | Optional request header hint, otherwise unset. |
-| `version` | Shared HTTP request context default such as `1.1`. |
-| `user_agent` | Shared HTTP request context unless scenario headers override it. |
+| `version` | Authored or shared-enriched HTTP request context, defaulting to a value such as `1.1`. |
+| `user_agent` | Authored or shared-enriched HTTP request context unless scenario headers override it. |
 | `request_body_len` | `0` for canonical `GET` requests. |
-| `response_body_len` | Shared HTTP response size consistent with route and download classification. |
+| `response_body_len` | Authored or shared-enriched HTTP response size consistent with route and download classification. |
 | `status_code` | Expanded `web_request.status_code`. |
 | `status_msg` | Derived from `status_code`, such as `OK` for `200`. |
 | `tags` | Empty set unless a later scenario needs HTTP tags. |
@@ -213,8 +214,8 @@ Implementation notes:
   `trans_depth`.
 - The HTTP `uid` must match the `uid` in the underlying TCP `conn.log` record.
 - `trans_depth` and Zeek file IDs are Zeek-owned. `response_body_len`, `version`, `user_agent`, MIME types, and
-  response filenames should come from shared HTTP context when future Apache or proxy generators need to agree with
-  Zeek.
+  response filenames should come from authored shared context when provided, then shared HTTP enrichment for omitted
+  values when future Apache or proxy generators need to agree with Zeek.
 - Download classification remains source-neutral metadata on the `web_request`; it does not require a separate
   source-neutral `file_download` event.
 - HTTP entity fields such as `resp_fuids`, `resp_filenames`, and `resp_mime_types` are present only when Zeek's HTTP
@@ -285,9 +286,10 @@ required source-neutral event fields:
 - Optional policy-loaded columns such as VLAN, DNS authority/additional answers, HTTP header-name vectors, file hashes,
   extracted-file metadata, JA3/JA3S package fields, or site-specific enrichments.
 
-Shared source-neutral enrichment should own values that multiple future generators need to agree on, such as client
-source ports, normalized flow keys, shared packet or byte estimates, HTTP versions, user agents, and response body
-lengths. Zeek should consume those facts rather than being the generator that invents them first.
+Shared source-neutral context should own values that multiple future generators need to agree on, such as client source
+ports, normalized flow keys, shared packet or byte estimates, DNS transaction context, HTTP versions, user agents, and
+response body lengths. Authored values should win; deterministic enrichment should fill omissions. Zeek should consume
+those facts rather than being the generator that invents them first.
 
 Source-neutral events should continue to own:
 

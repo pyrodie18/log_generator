@@ -327,12 +327,21 @@ Recommended common fields:
 
 Source-specific details should be produced by generators. For example, Zeek `uid`, Windows `EventID`, and firewall vendor action strings should not be required in the core event model.
 
-Some values are not authored by a scenario but are still source-neutral because multiple source generators must agree
-on them. Examples include client ephemeral source ports, normalized flow five-tuples, NAT translations, shared byte or
-packet estimates, HTTP user-agent strings, HTTP versions, and response sizes. These should be produced by deterministic
-source-neutral enrichment before source-specific generators run, either directly on expanded events or in immutable
-flow/request context linked to those events. Source-specific generators should consume that shared context rather than
-mutating the original event after they discover a missing field.
+Some values are source-neutral because multiple source generators must agree on them, even though most scenario authors
+will not want to write them by hand. Examples include client ephemeral source ports, normalized flow five-tuples, NAT
+translations, shared byte or packet estimates, DNS transaction context, HTTP user-agent strings, HTTP versions, and
+response sizes.
+
+The precedence should be:
+
+1. Authored details win when a scenario provides them.
+2. Deterministic source-neutral enrichment fills any omitted shared details.
+3. Source-specific generators derive only source-native fields that do not need cross-source agreement.
+
+This lets a user plan every detail of a scenario when needed while keeping concise scenarios reproducible and sane by
+default. Shared details may live directly on expanded events or in immutable flow, DNS, or HTTP context linked to those
+events. Source-specific generators should consume that shared context rather than mutating the original event after
+they discover a missing field.
 
 Source-specific extension fields may be allowed under plugin-owned namespaces, such as:
 
@@ -1065,7 +1074,7 @@ Major tasks:
 
 - Allow YAML and Python scenarios to request `zeek`.
 - Implement Zeek TSV schema definitions and header rendering.
-- Add deterministic source-neutral enrichment for shared flow, DNS, and HTTP facts such as client source ports,
+- Add author-overridable source-neutral enrichment for shared flow, DNS, and HTTP facts such as client source ports,
   normalized flow keys, byte or packet estimates, DNS transaction context, HTTP user agents, HTTP versions, and
   response sizes.
 - Implement deterministic Zeek-owned values such as `uid`, Zeek file IDs, Zeek connection state, Zeek history, and TSV

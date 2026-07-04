@@ -166,11 +166,11 @@ Examples:
 - `query_name`
 - `resolved_addresses`
 
-### Shared Derived Context
+### Shared Detail Context
 
-Some fields are not authored by a scenario, but they are still source-neutral because multiple source-specific
-generators must agree on them. These values should be created by deterministic expansion or enrichment before
-source-specific generators run.
+Some fields are source-neutral because multiple source-specific generators must agree on them. A scenario author may
+provide these details for exact control, but concise scenarios may omit them and let deterministic expansion or
+enrichment create sane defaults before source-specific generators run.
 
 Examples:
 
@@ -181,7 +181,13 @@ Examples:
 - HTTP user-agent, HTTP version, response size, and other request facts that may appear in Zeek, Apache, proxy, or
   firewall-adjacent records.
 
-Shared derived context may live directly on expanded events or in an immutable sidecar object linked by event ID,
+Precedence:
+
+1. Authored shared details win.
+2. Deterministic enrichment fills omitted shared details.
+3. Source-specific generators derive only source-native values that do not need cross-source agreement.
+
+Shared detail context may live directly on expanded events or in an immutable sidecar object linked by event ID,
 correlation ID, or flow ID. Source-specific generators should consume this context, not mutate the original event after
 the first generator notices a missing value.
 
@@ -198,7 +204,7 @@ Examples:
 - auditd serial numbers
 - Firewall policy names, rule numbers, action strings, and NAT renderings
 - source-native timestamp strings
-- synthetic packet or byte counters
+- source-native packet or byte counters when they are not backed by shared flow estimates
 
 The source-neutral event may provide enough context for a generator to derive these values deterministically from a
 seed, but it should not store source-native fields as required model data.
