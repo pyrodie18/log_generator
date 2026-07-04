@@ -21,7 +21,7 @@ Statistically realistic generation should be designed for but not required in th
 
 ## Current Design Decisions
 
-- First Zeek fidelity target: the current Zeek feature release line, currently Zeek 8.2.x.
+- First Zeek fidelity target: the Zeek 8.2.x field set documented in `docs/zeek-schema-notes.md`.
 - Secondary Zeek compatibility target: Zeek 8.0.x LTS where practical.
 - Windows Event Log output target: clear, structured JSON files that preserve Windows event semantics.
 - SIEM ingestion configuration is out of scope. The project only needs to produce understandable directory structures,
@@ -37,6 +37,23 @@ Statistically realistic generation should be designed for but not required in th
 - MITRE ATT&CK metadata is optional for the MVP. Attack-style scenarios may include technique labels, but benign
   scenarios and core event models should not require them.
 - Plugin API stability: early implementation may favor iteration over long-term backward compatibility.
+
+## Implementation Status and Roadmap Alignment
+
+The implementation has moved some capabilities earlier than the original roadmap described. Future work should treat
+the phase-specific planning documents as the more current implementation handoff:
+
+- Phase 0 is complete as planning work. The detailed artifacts live under `docs/`.
+- Phase 1 is complete for the current MVP source-neutral core: `linux-mini-lab`, deterministic canonical scenarios,
+  source-neutral event expansion, semantic validation, generic normalized JSONL, output metadata, and manifest writing.
+- Phase 2 is complete for the current YAML and CLI workflow: one scenario per YAML file, deterministic timing,
+  canonical YAML fixtures, answer-key metadata, public generation helpers, and `log-generator generate`.
+- Generic normalized JSONL and the parser-friendly output tree are already implemented. They should no longer be
+  planned as separate future phases.
+- Phase 3 is now the first source-specific generator: Zeek native-style TSV for `conn.log`, `dns.log`, and `http.log`.
+  The detailed handoff is `docs/phase-3-planning.md`.
+- Apache, auditd, firewall, proxy, noise, richer attack sequencing, and stable plugin APIs remain future work after
+  the Zeek path proves the first source-specific generator boundary.
 
 ## Recommended Architecture
 
@@ -201,8 +218,8 @@ Examples:
 - `process_execution`
 - `lateral_movement_attempt`
 
-Current Phase 0 planning narrows the MVP event set. Authors should model HTTP activity with `web_request`; Apache or
-nginx records are generator output, and download behavior is inferred from the `web_request` path.
+The implemented MVP event set is intentionally narrow. Authors should model HTTP activity with `web_request`; Apache
+or nginx records are generator output, and download behavior is inferred from the `web_request` path.
 
 ### Attack Chain and Attack Step
 
@@ -451,10 +468,14 @@ scenario.user("alice").on("linux-ws-01").browses("http://web-server-01.internal/
 run = GeneratorRun(
     environment=env,
     scenario=scenario,
-    output_families=["zeek", "apache", "auditd", "firewall"],
+    output_families=["generic-normalized", "zeek"],
     output=DirectoryOutput("./output"),
 )
 ```
+
+The Python example above is still aspirational API syntax. The current implemented public workflow uses scenario
+objects, YAML fixtures, and `log-generator generate`; stable high-level builder syntax should wait until more source
+families prove the right abstraction.
 
 ### Attack Python Example
 
@@ -494,10 +515,7 @@ time_range:
   start: "2026-06-27T09:00:00Z"
   end: "2026-06-27T10:00:00Z"
 output_families:
-  - zeek
-  - apache
-  - auditd
-  - firewall
+  - generic-normalized
 events:
   - id: evt-benign-web-001
     type: web_request
@@ -523,10 +541,7 @@ time_range:
   start: "2026-06-27T09:15:00Z"
   end: "2026-06-27T09:30:00Z"
 output_families:
-  - zeek
-  - apache
-  - auditd
-  - firewall
+  - generic-normalized
 events:
   - id: credential-use
     type: linux_local_login
@@ -564,7 +579,13 @@ attack_chain:
     technique_name: Ingress Tool Transfer
 ```
 
+Phase 3 should allow YAML scenarios to add `zeek` to `output_families`. Apache, auditd, firewall, and proxy families
+should remain rejected until their generators exist.
+
 ### Noise YAML Example
+
+Noise profiles are documented for the future design. The current YAML implementation rejects `noise_profiles` with an
+explicit unsupported-feature message.
 
 ```yaml
 schema_version: scenario/v0.1
@@ -589,8 +610,9 @@ noise_profiles:
 ## First Environment Template
 
 The first built-in environment should be intentionally small and Linux-only. This keeps the initial implementation
-focused while still exercising host identity, users, network segmentation, network device policy, local authentication,
-Apache web logs, auditd logs, Zeek network visibility, and derived firewall telemetry.
+focused while still providing room for host identity, users, network segmentation, network device policy, local
+authentication, Apache web logs, auditd logs, Zeek network visibility, and derived firewall telemetry as source
+families are added.
 
 Template name: `linux-mini-lab`
 
@@ -621,7 +643,7 @@ Authentication model:
 - All user activity uses local Linux accounts.
 - LDAP, Active Directory, Kerberos, NTLM, and cloud identity are out of scope for the first environment template.
 
-Initial log families:
+Planned log families:
 
 - `zeek-sensor-01/zeek`: Zeek `conn.log`, `dns.log`, `http.log`, and TLS-related logs where applicable.
 - `linux-ws-01/auditd`: Local Linux authentication and process-relevant audit records.
@@ -844,6 +866,10 @@ The validation framework should explicitly distinguish:
 
 ## Proposed Package Layout
 
+The current implementation uses a flatter package layout than this long-term sketch. That is acceptable while the core,
+YAML workflow, and first output writers are still small. Future package splits should be driven by real complexity,
+especially after multiple source-specific generators exist.
+
 ```text
 src/log_generator/
   __init__.py
@@ -919,9 +945,14 @@ tests/
 
 ## Development Roadmap
 
+The roadmap below supersedes the original phase ordering. The original plan placed generic JSONL and manifest output
+after YAML authoring, but those capabilities are already part of the implemented Phase 1 and Phase 2 baseline.
+
 ### Phase 0: Design Decisions and Open Questions
 
 Goal: finalize MVP boundaries.
+
+Status: complete.
 
 Major tasks:
 
@@ -950,134 +981,145 @@ Acceptance criteria:
 
 ### Phase 1: Source-Neutral Core Framework
 
-Goal: implement environment, entity, event, correlation, and timeline primitives.
+Goal: implement environment, event, correlation, validation, generic output, and manifest primitives.
+
+Status: complete for the current MVP.
 
 Major tasks:
 
-- Add core models.
-- Add deterministic seed handling.
-- Add event lineage.
-- Add basic validation.
+- Add `linux-mini-lab` environment models.
+- Add the MVP source-neutral events: `dns_lookup`, `network_connection`, `web_request`, and `linux_local_login`.
+- Add deterministic event IDs, correlation IDs, parent links, ordering, and scenario expansion.
+- Add semantic validation for environment references and event relationships.
+- Add generic normalized JSONL output.
+- Add parser-friendly output paths, scenario metadata, ground-truth metadata, and the top-level manifest.
 
 Deliverables:
 
-- Core package.
-- Unit tests.
-- Simple in-memory scenario expansion.
+- Core package under `src/log_generator/core/`.
+- Generic output helpers under `src/log_generator/output/`.
+- Canonical Python scenario fixtures.
+- Unit and regression tests for source-neutral events, environment validation, generic output, and manifests.
 
 Risks:
 
 - Core models become too generic or too complex.
-
-Acceptance criteria:
-
-- Source-neutral events can be created, scheduled, linked, and validated.
-
-### Phase 2: Scenario Model and Authoring Interface
-
-Goal: support Python and YAML scenario definitions.
-
-Major tasks:
-
-- Add Python scenario builder.
-- Add YAML parser.
-- Add schema validation for YAML.
-- Add clear error messages.
-
-Deliverables:
-
-- Benign YAML example.
-- Attack YAML example.
-- Noise YAML example.
-
-Risks:
-
-- YAML becomes too rigid.
-- Python API becomes too magical.
-
-Acceptance criteria:
-
-- Example scenarios load into normalized events deterministically.
-
-### Phase 3: First Minimal Generic JSON Generator
-
-Goal: emit normalized events as generic JSON Lines.
-
-Major tasks:
-
-- Add generic JSON generator.
-- Add JSONL writer.
-- Add snapshot tests.
-
-Deliverables:
-
-- Deterministic JSONL output.
-- Initial manifest.
-
-Risks:
-
 - Generic output becomes confused with source-specific output.
 
 Acceptance criteria:
 
-- A simple scenario produces stable, testable JSONL.
+- Source-neutral events can be created, scheduled, linked, and validated.
+- Canonical scenarios produce stable generic normalized JSONL and manifest output.
 
-### Phase 4: First Real Source Generator, Zeek
+### Phase 2: Scenario Model and Authoring Interface
 
-Goal: generate Zeek logs for common web activity.
+Goal: support YAML scenario definitions and shell generation using the Phase 1 core.
+
+Status: complete for deterministic single-scenario YAML files.
 
 Major tasks:
 
-- Implement Zeek `dns.log`.
-- Implement Zeek `conn.log`.
-- Implement Zeek `http.log`.
-- Add TLS-related records where scenario context supports them.
-- Validate against Zeek 8.2.x field expectations.
+- Add YAML parser.
+- Add schema validation for YAML.
+- Add clear error messages.
+- Add deterministic timestamp and dependency resolution.
+- Convert authored YAML events into Phase 1 source-neutral primitives.
+- Add public YAML loading and generation helpers.
+- Add CLI generation through `log-generator generate`.
 
 Deliverables:
 
-- Zeek native-style files.
-- Zeek JSONL option if useful.
-- Zeek validators.
+- Canonical benign YAML example.
+- Canonical local-account-misuse YAML example.
+- YAML validation tests.
+- CLI tests.
+- README usage notes.
+
+Risks:
+
+- YAML becomes too rigid.
+- YAML conversion duplicates source-neutral expansion logic.
+- Source-specific output sneaks into the authoring phase before its generator exists.
+
+Acceptance criteria:
+
+- Example scenarios load into normalized events deterministically.
+- YAML-generated canonical output matches the Phase 1 Python fixture output.
+- Expected authoring errors produce concise validation messages.
+
+### Phase 3: First Source-Specific Generator, Zeek
+
+Goal: generate native-style Zeek TSV logs for common web activity.
+
+Status: planned in `docs/phase-3-planning.md`.
+
+Major tasks:
+
+- Allow YAML and Python scenarios to request `zeek`.
+- Implement Zeek TSV schema definitions and header rendering.
+- Implement deterministic Zeek-owned values such as `uid`, source ports, transaction IDs, durations, byte counts,
+  packet counts, DNS RTTs, TTLs, HTTP transaction depths, user agents, and response body lengths.
+- Implement Zeek `conn.log`, `dns.log`, and `http.log` mapping from existing source-neutral events.
+- Write Zeek files under `logs/zeek-sensor-01/zeek/`.
+- Add Zeek file entries and useful omitted-stream entries to the manifest.
+
+Deliverables:
+
+- `src/log_generator/output/zeek.py` or equivalent.
+- Zeek native-style TSV files.
+- Canonical benign and misuse Zeek output tests.
+- Manifest and CLI tests for Zeek-enabled runs.
+- README usage notes for requesting Zeek output.
 
 Risks:
 
 - Zeek-specific assumptions leak into the core.
 - Field fidelity is incomplete.
+- Zeek stream linkage drifts, especially `uid` reuse between `conn.log`, `dns.log`, and `http.log`.
 
 Acceptance criteria:
 
-- A web browsing event produces plausible Zeek DNS, conn, and HTTP records.
+- A canonical web scenario produces plausible Zeek DNS, connection, and HTTP records.
+- DNS and HTTP rows share `uid` values with their underlying `conn.log` rows.
+- Generic-only output remains unchanged.
 
-### Phase 5: Parser-Friendly Directory Output Writer
+### Phase 4: Zeek Expansion or Linux Host Logs
 
-Goal: generate output trees that humans can inspect and downstream tools can monitor and parse.
+Goal: broaden source-specific coverage after the first Zeek path proves the generator boundary.
+
+Status: future.
 
 Major tasks:
 
-- Add directory layout writer.
-- Add generating source, log family, log stream, subject host, timestamp, and format metadata.
-- Add manifest.
-- Keep ingestion configuration files out of scope.
+- Choose the next target from observed scenario needs:
+  - Add Zeek `files.log` for HTTP downloads.
+  - Add Zeek `ssl.log` for HTTPS/TLS scenarios.
+  - Add auditd-style Linux local authentication records.
+  - Add Apache access logs for `web-server-01`.
+- Add any required source-neutral hints only when a real generator needs them.
+- Add source-specific validators and golden fixtures for the chosen target.
 
 Deliverables:
 
-- Parser-friendly output directory.
-- Documentation for the generated directory structure and manifest.
+- One additional source-specific stream or tightly related stream group.
+- Cross-source consistency tests against existing generic and Zeek output.
+- Updated documentation and output contract examples.
 
 Risks:
 
-- Timestamp ambiguity.
-- Directory layout churn.
+- Expanding too many families at once slows validation and testing.
+- Host-log requirements may expose missing source-neutral event context.
 
 Acceptance criteria:
 
-- Generated files are separated by generating source and log family.
-- The manifest includes enough supplemental metadata for external ingestion tooling.
+- The selected next stream produces stable, plausible records for a canonical scenario.
+- Existing Phase 3 Zeek behavior remains stable.
 
-### Phase 6: Background Noise Generation
+### Phase 5: Background Noise Generation
 
 Goal: generate realistic benign activity around scenarios.
+
+Status: future.
 
 Major tasks:
 
@@ -1085,11 +1127,13 @@ Major tasks:
 - Add time-of-day behavior.
 - Add per-host and per-user constraints.
 - Add signal-to-noise controls.
+- Add YAML support for supported noise profile fields.
 
 Deliverables:
 
 - Background noise YAML support.
 - Deterministic noise tests.
+- Cross-source noise validation for implemented source families.
 
 Risks:
 
@@ -1099,10 +1143,13 @@ Risks:
 Acceptance criteria:
 
 - Noise generation is reproducible and respects environment constraints.
+- Answer-key metadata remains useful when noise is present.
 
-### Phase 7: Linux Host Log Generators
+### Phase 6: Linux Host Log Generators
 
 Goal: generate Linux host logs for the initial `linux-mini-lab` template.
+
+Status: future.
 
 Major tasks:
 
@@ -1125,9 +1172,11 @@ Acceptance criteria:
 
 - A local Linux login and web browsing scenario produces plausible auditd, Apache, and Zeek records.
 
-### Phase 8: Firewall, Proxy, and Router Generators
+### Phase 7: Firewall, Proxy, and Router Generators
 
 Goal: add common infrastructure telemetry.
+
+Status: future.
 
 Major tasks:
 
@@ -1149,16 +1198,18 @@ Acceptance criteria:
 
 - Web and denied-connection scenarios produce consistent Zeek, firewall, and proxy records.
 
-### Phase 9: Attack Sequence Support
+### Phase 8: Attack Sequence Support
 
 Goal: support controlled attack stories for demos and CTFs.
 
+Status: partially started for metadata; future for richer sequencing.
+
 Major tasks:
 
-- Add attack chain models.
+- Add richer attack chain models.
 - Add step dependencies and branching.
-- Add ATT&CK metadata support.
-- Add answer-key output.
+- Expand ATT&CK metadata support.
+- Keep answer-key output separate from generated source logs.
 - Add difficulty controls.
 
 Deliverables:
@@ -1175,9 +1226,38 @@ Acceptance criteria:
 
 - A multi-stage attack produces coherent logs and an answer key.
 
+### Phase 9: Plugin API and External Source Generators
+
+Goal: stabilize the generator boundary after several built-in source families exist.
+
+Status: future.
+
+Major tasks:
+
+- Extract common generator descriptors and registration.
+- Define supported event-type declarations and unsupported-event behavior.
+- Add package entry point discovery if needed.
+- Document versioning and compatibility expectations.
+
+Deliverables:
+
+- Stable plugin interface.
+- Example external generator.
+- Plugin authoring documentation.
+
+Risks:
+
+- Freezing the API before source-family requirements are understood.
+
+Acceptance criteria:
+
+- A source generator can be added without changing core scenario or event code.
+
 ### Phase 10: Validation, Testing, Documentation, and Packaging
 
 Goal: harden the project for long-term use.
+
+Status: ongoing, with expanded work after additional source families exist.
 
 Major tasks:
 
@@ -1216,7 +1296,7 @@ Acceptance criteria:
 | Noise overwhelms exercises | Add explicit signal-to-noise controls and answer-key support. |
 | Schema fidelity is hard to maintain | Version schemas, use golden samples, and isolate validators by source. |
 | Plugin API changes frequently | Accept churn during early design, then freeze only after built-in generators prove the API. |
-| Too much complexity too early | Implement generic JSON and one Zeek path before expanding. |
+| Too much complexity too early | Use the implemented generic output baseline, add one Zeek path, then expand. |
 | Performance issues at large volume | Stream records and validate incrementally. |
 | Downstream timestamp or line-breaking problems | Keep generated files separated by generating source and log family, document timestamp fields in the manifest, and avoid multiline formats unless the source requires them. |
 | Lack of good sample logs | Use public samples where allowed and build high-quality synthetic fixtures over time. |
@@ -1229,16 +1309,11 @@ Acceptance criteria:
 
 ## Recommended Next Steps
 
-1. Define the first `linux-mini-lab` environment template.
-2. Define the first normalized event taxonomy:
-   - `dns_lookup`
-   - `network_connection`
-   - `web_request`
-   - `linux_local_login`
-   - `tls_connection` and `process_execution` are documented but deferred until a scenario needs them.
-3. Define the first YAML schema for the canonical scenarios.
-4. Implement the source-neutral core models.
-5. Implement deterministic generic JSONL output.
-6. Implement parser-friendly directory output and manifest metadata.
-7. Add Zeek DNS, conn, and HTTP generation for the current Zeek release line.
-8. Add auditd and Apache generators for the initial Linux-only template.
+1. Implement Phase 3 from `docs/phase-3-planning.md`: Zeek native-style TSV `conn.log`, `dns.log`, and `http.log`.
+2. Update YAML output-family validation so `zeek` is supported and other source-specific families remain explicit
+   unsupported errors.
+3. Extend manifest writing so generated Zeek files and omitted requested Zeek streams are described correctly.
+4. Add canonical Zeek tests for benign internal web browsing and local account misuse.
+5. Update README examples for `output_families: [generic-normalized, zeek]`.
+6. After Phase 3, choose either Zeek `files.log`/`ssl.log` or Linux auditd/Apache as the next source-specific target
+   based on the next canonical scenario need.
