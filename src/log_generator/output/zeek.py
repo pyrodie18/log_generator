@@ -93,9 +93,12 @@ class ZeekOmittedStream:
     """
 
     source_id: str
+    source_kind: str
     log_family: str
     log_stream: str
     reason: str
+    requested: bool
+    configured: bool
 
 
 @dataclass(frozen=True)
@@ -288,6 +291,8 @@ def write_zeek_logs(
     if not zeek_scenarios:
         return ZeekWriteResult(files=(), omitted_streams=())
 
+    validate_zeek_scenarios(zeek_scenarios)
+
     if generated_at is None:
         # Zeek headers include open/close wall-clock times, so normalize once before rendering every stream.
         generated_at = datetime.now(timezone.utc)
@@ -306,9 +311,12 @@ def write_zeek_logs(
             omitted_streams.append(
                 ZeekOmittedStream(
                     source_id=ZEEK_SENSOR_ID,
+                    source_kind="sensor",
                     log_family="zeek",
                     log_stream=file_name,
-                    reason="no matching visible records",
+                    reason="zero_records",
+                    requested=True,
+                    configured=True,
                 )
             )
             continue
@@ -327,6 +335,20 @@ def write_zeek_logs(
         )
 
     return ZeekWriteResult(files=tuple(written_files), omitted_streams=tuple(omitted_streams))
+
+
+def validate_zeek_scenarios(scenarios: tuple[Scenario, ...]) -> None:
+    """
+    Validate that requested scenarios can be written by the Phase 3 Zeek writer.
+
+    Args:
+        scenarios (tuple[Scenario, ...]): Scenarios requesting Zeek output.
+
+    Returns:
+        None: Raises ValueError when a scenario is unsupported.
+    """
+    for scenario in scenarios:
+        _environment_for_scenario(scenario)
 
 
 def build_zeek_records(
@@ -2017,6 +2039,7 @@ __all__ = [
     "render_zeek_value",
     "render_zeek_vector",
     "schema_for_stream",
+    "validate_zeek_scenarios",
     "write_zeek_logs",
     "zeek_schema_field_names",
     "zeek_schema_field_types",

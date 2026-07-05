@@ -5,14 +5,14 @@ Scenario model and expansion definitions.
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from hashlib import sha1
+from pathlib import Path
 from typing import Any, Optional, Union
 
-from log_generator.core.environment import Environment, Host, Service, build_linux_mini_lab
+from log_generator.core.environment import Environment, Host, Service
 from log_generator.core.events import (
     DnsLookupEvent,
     DnsContext,
     HttpContext,
-    LinuxLocalLoginEvent,
     NetworkContext,
     NetworkConnectionEvent,
     SourceNeutralEvent,
@@ -694,128 +694,39 @@ def _next_sequence_order(expanded_events: list[ScenarioEvent]) -> int:
 
 def build_benign_internal_web_scenario() -> Scenario:
     """
-    Build the canonical benign internal web scenario fixture.
+    Load the canonical benign internal web scenario.
 
     Returns:
         Scenario: Deterministic expanded benign web scenario.
     """
-    scenario_id = "scenario-benign-internal-web"
-    correlation_id = "corr-benign-internal-web-001"
-    seed = 1001
-    environment = build_linux_mini_lab()
-    start_time = parse_utc_datetime("2026-01-15T14:00:00Z")
-
-    authored_events = (
-        AuthoredWebRequest(
-            event_id="evt-benign-web-003",
-            timestamp=parse_utc_datetime("2026-01-15T14:00:02Z"),
-            actor_user_id="user-alice",
-            source_host_id="linux-ws-01",
-            service_id="svc-web-http",
-            method="GET",
-            path="/",
-            correlation_id=correlation_id,
-            helper_event_ids={
-                "dns_lookup": "evt-benign-web-001",
-                "network_connection": "evt-benign-web-002",
-            },
-        ),
-    )
-    events = expand_authored_events(scenario_id, seed, environment, authored_events)
-
-    return Scenario(
-        id=scenario_id,
-        name="Benign Internal Web Browsing",
-        seed=seed,
-        environment_id=environment.id,
-        environment_version=environment.version,
-        start_time=start_time,
-        end_time=parse_utc_datetime("2026-01-15T14:00:02Z"),
-        events=events,
-        authored_event_count=len(authored_events),
-    )
+    return _load_canonical_yaml_scenario("benign-internal-web.yaml")
 
 
 def build_local_account_misuse_web_scenario() -> Scenario:
     """
-    Build the canonical local account misuse web scenario fixture.
+    Load the canonical local account misuse web scenario.
 
     Returns:
         Scenario: Deterministic expanded misuse web scenario.
     """
-    scenario_id = "scenario-local-account-misuse-web"
-    correlation_id = "corr-local-account-misuse-001"
-    seed = 2002
-    environment = build_linux_mini_lab()
-    start_time = parse_utc_datetime("2026-01-15T03:12:00Z")
+    return _load_canonical_yaml_scenario("local-account-misuse-web.yaml")
 
-    authored_events = (
-        LinuxLocalLoginEvent(
-            event_id="evt-misuse-web-001",
-            scenario_id=scenario_id,
-            timestamp=parse_utc_datetime("2026-01-15T03:12:00Z"),
-            status="success",
-            correlation_id=correlation_id,
-            actor_user_id="user-alice",
-            target_host_id="linux-ws-01",
-            login_method="local_console",
-            metadata={"activity_classification": "suspicious"},
-        ),
-        AuthoredWebRequest(
-            event_id="evt-misuse-web-004",
-            timestamp=parse_utc_datetime("2026-01-15T03:12:18Z"),
-            actor_user_id="user-alice",
-            source_host_id="linux-ws-01",
-            service_id="svc-web-http",
-            method="GET",
-            path="/admin",
-            correlation_id=correlation_id,
-            parent_event_id="evt-misuse-web-001",
-            attack={"technique_id": "T1087", "technique_name": "Account Discovery"},
-            helper_event_ids={
-                "dns_lookup": "evt-misuse-web-002",
-                "network_connection": "evt-misuse-web-003",
-            },
-            dns_helper_offset=timedelta(seconds=3),
-            connection_helper_offset=timedelta(seconds=2),
-        ),
-        AuthoredWebRequest(
-            event_id="evt-misuse-web-005",
-            timestamp=parse_utc_datetime("2026-01-15T03:12:28Z"),
-            actor_user_id="user-alice",
-            source_host_id="linux-ws-01",
-            service_id="svc-web-http",
-            method="GET",
-            path="/admin/archive.tar.gz",
-            correlation_id=correlation_id,
-            attack={"technique_id": "T1105", "technique_name": "Ingress Tool Transfer"},
-        ),
-    )
-    events = expand_authored_events(scenario_id, seed, environment, authored_events)
 
-    return Scenario(
-        id=scenario_id,
-        name="Local Account Misuse and Suspicious Web Access",
-        seed=seed,
-        environment_id=environment.id,
-        environment_version=environment.version,
-        start_time=start_time,
-        end_time=parse_utc_datetime("2026-01-15T03:12:28Z"),
-        events=events,
-        answer_key=(
-            AnswerKeyRecord(
-                scenario_id=scenario_id,
-                correlation_id=correlation_id,
-                label="suspicious_internal_web_download",
-                primary_event_id="evt-misuse-web-005",
-                supporting_event_ids=("evt-misuse-web-001", "evt-misuse-web-004"),
-                description=(
-                    "Suspicious local account use followed by admin page access and archive download."
-                ),
-            ),
-        ),
-        authored_event_count=len(authored_events),
-    )
+def _load_canonical_yaml_scenario(file_name: str) -> Scenario:
+    """
+    Load one canonical scenario from the repository YAML fixtures.
+
+    Args:
+        file_name (str): Canonical scenario YAML file name.
+
+    Returns:
+        Scenario: Expanded source-neutral scenario.
+    """
+    from log_generator.scenario_yaml import load_scenario_from_yaml
+
+    repository_root = Path(__file__).resolve().parents[3]
+
+    return load_scenario_from_yaml(repository_root / "scenarios" / "canonical" / file_name)
 
 
 __all__ = [

@@ -2,10 +2,9 @@
 
 ## Purpose
 
-This document records the Phase 0 Zeek schema research needed before the first source-specific Zeek generator is
-implemented. It is scoped to the `linux-mini-lab` environment and the canonical web browsing scenarios. Phase 1 should
-still implement source-neutral events and generic normalized JSON Lines first; these notes are a handoff for the later
-Zeek generator.
+This document records the Zeek schema research used by the first source-specific Zeek generator. It is scoped to the
+`linux-mini-lab` environment and the canonical web browsing scenarios. Phase 3 implements the MVP `conn.log`,
+`dns.log`, and `http.log` output described here.
 
 ## Authoritative References
 
@@ -36,16 +35,16 @@ packages, and logging policy.
 
 MVP Zeek stream targets:
 
-| Stream | Phase 0 status | Source-neutral event source | Canonical scenario use |
+| Stream | Phase 3 status | Source-neutral event source | Canonical scenario use |
 | --- | --- | --- | --- |
-| `conn.log` | Required for first Zeek generator | `network_connection`; prerequisite flow for protocol records | DNS and HTTP flows observed by `zeek-sensor-01`. |
-| `dns.log` | Required for first Zeek generator | `dns_lookup` | DNS lookup for `web-server-01.internal`. |
-| `http.log` | Required for first Zeek generator | `web_request` | Homepage, admin page, and archive requests. |
+| `conn.log` | Implemented | `network_connection`; prerequisite flow for protocol records | DNS and HTTP flows observed by `zeek-sensor-01`. |
+| `dns.log` | Implemented | `dns_lookup` | DNS lookup for `web-server-01.internal`. |
+| `http.log` | Implemented | `web_request` | Homepage, admin page, and archive requests. |
 | `ssl.log` | Deferred | `tls_connection` | Not used by current scenarios because `svc-web-http` is plain HTTP. |
 | `files.log` | Deferred | Download-classified `web_request` | Useful later for downloads, but not in `profile-zeek-only` yet. |
 
-The first Zeek generator should not emit `ssl.log` for the canonical scenarios. It should also avoid adding
-`files.log` until the environment logging profile and output contract explicitly include it.
+The Phase 3 Zeek generator does not emit `ssl.log` for the canonical scenarios. It should also avoid adding
+`files.log` until the environment logging profile and output contract explicitly include it in a later phase.
 
 For the protocol streams targeted here, `conn.log` is not optional supporting telemetry. Zeek protocol records such as
 `dns.log`, `http.log`, `ssl.log`, and connection-scoped `files.log` must have an underlying `conn.log` record with the
@@ -53,13 +52,13 @@ same Zeek `uid`.
 
 ## Format Decision
 
-The first Zeek generator should emit native-style Zeek TSV logs by default.
+The Phase 3 Zeek generator emits native-style Zeek TSV logs.
 
 Rationale:
 
 - Zeek's default log format is TSV with header rows such as `#separator`, `#fields`, and `#types`.
 - Native-style output best satisfies the project's high-fidelity Zeek goal.
-- The output contract already reserves future source-specific format names such as `zeek-tsv`.
+- The output contract uses source-specific format names such as `zeek-tsv`.
 - JSON output is useful for pipelines, but generic normalized JSONL already covers the Phase 1 structured-output need.
 
 Deferred option:
@@ -318,7 +317,7 @@ Important compatibility guardrails:
 
 ### `scenario-benign-internal-web`
 
-Expected Zeek records in a future full-family run:
+Expected Zeek records in a Phase 3 Zeek-enabled run:
 
 | Source-neutral event | Zeek stream | Key generated facts |
 | --- | --- | --- |
@@ -328,7 +327,7 @@ Expected Zeek records in a future full-family run:
 
 ### `scenario-local-account-misuse-web`
 
-Expected Zeek records in a future full-family run:
+Expected Zeek records in a Phase 3 Zeek-enabled run:
 
 | Source-neutral event | Zeek stream | Key generated facts |
 | --- | --- | --- |

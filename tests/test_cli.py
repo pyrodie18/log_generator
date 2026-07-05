@@ -276,6 +276,7 @@ def test_cli_generate_writes_zeek_output_when_requested(tmp_path: Path, capsys) 
         "logs/zeek-sensor-01/zeek/dns.log",
         "logs/zeek-sensor-01/zeek/http.log",
     ]
+    assert manifest["requested_output_families"] == ["generic-normalized", "zeek"]
     assert (output_root / "logs" / "zeek-sensor-01" / "zeek" / "conn.log").exists()
     assert manifest["files"][1]["format"] == "zeek-tsv"
     assert manifest["files"][1]["record_count"] == 2

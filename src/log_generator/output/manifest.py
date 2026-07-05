@@ -14,12 +14,19 @@ from log_generator.output.jsonl import (
     safe_output_path,
     write_generic_normalized_events,
 )
-from log_generator.output.zeek import ZeekOmittedStream, ZeekWriteResult, ZeekWrittenFile, write_zeek_logs
+from log_generator.output.zeek import (
+    ZeekOmittedStream,
+    ZeekWriteResult,
+    ZeekWrittenFile,
+    validate_zeek_scenarios,
+    write_zeek_logs,
+)
 
 
 MANIFEST_PATH = ("manifest.json",)
 SCENARIO_MANIFEST_PATH = ("metadata", "scenario-manifest.json")
 GROUND_TRUTH_PATH = ("metadata", "ground-truth.jsonl")
+SUPPORTED_OUTPUT_FAMILIES = frozenset({"generic-normalized", "zeek"})
 
 
 def write_output_manifest(
@@ -41,6 +48,8 @@ def write_output_manifest(
         Path: Path to the written top-level manifest file.
     """
     generated_at = _normalize_generated_at(generated_at)
+    _validate_requested_output_families(scenarios)
+
     events_path = None
     # Generic normalized output is shared across scenarios, but only scenarios requesting it are included.
     generic_scenarios = tuple(scenario for scenario in scenarios if "generic-normalized" in scenario.output_families)
@@ -69,6 +78,29 @@ def write_output_manifest(
     _write_json_file(manifest_path, manifest)
 
     return manifest_path
+
+
+def _validate_requested_output_families(scenarios: tuple[Scenario, ...]) -> None:
+    """
+    Validate requested output families before any output files are written.
+
+    Args:
+        scenarios (tuple[Scenario, ...]): Scenarios included in the output set.
+
+    Returns:
+        None: Raises ValueError when a requested writer is unsupported.
+    """
+    zeek_scenarios = []
+
+    for scenario in scenarios:
+        for output_family in scenario.output_families:
+            if output_family not in SUPPORTED_OUTPUT_FAMILIES:
+                raise ValueError(f"unsupported output family '{output_family}'")
+
+        if "zeek" in scenario.output_families:
+            zeek_scenarios.append(scenario)
+
+    validate_zeek_scenarios(tuple(zeek_scenarios))
 
 
 def write_scenario_manifest(output_root: Path, scenarios: tuple[Scenario, ...]) -> Path:
@@ -269,9 +301,12 @@ def _omitted_stream_entry(omitted_stream: ZeekOmittedStream) -> dict[str, object
     """
     return {
         "source_id": omitted_stream.source_id,
+        "source_kind": omitted_stream.source_kind,
         "log_family": omitted_stream.log_family,
         "log_stream": omitted_stream.log_stream,
         "reason": omitted_stream.reason,
+        "requested": omitted_stream.requested,
+        "configured": omitted_stream.configured,
     }
 
 

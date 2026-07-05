@@ -352,16 +352,15 @@ These decisions incorporate the answered Phase 3 planning questions:
 | HTTP connection reuse | Reuse connection by scenario, source host, service, correlation, and destination | Supports the canonical misuse two-request sequence. |
 | Shared flow facts | Authored values win; deterministic enrichment fills omissions before writers run | Gives users exact control without sacrificing concise reproducible scenarios. |
 
-## Current Implementation Status Before Task 3
+## Current Implementation Status
 
-The repository is ready for Task 3. The implemented baseline already covers output-family validation, Zeek TSV schema
-and rendering primitives, deterministic Zeek record derivation, Zeek file writing, manifest entries, CLI dispatch, and
-README coverage for the current Zeek workflow.
+Phase 3 is implemented. The repository now covers output-family validation, Zeek TSV schemas and rendering primitives,
+source-neutral authored shared-detail overrides, deterministic Zeek record derivation, Zeek file writing, manifest
+entries, CLI dispatch, and README coverage for the Zeek workflow.
 
-Task 3 should not reopen the resolved questions above. Its focus is narrower: add source-neutral authored override
-fields and validation, then make existing deterministic enrichment use those authored values when present. Until Task 3
-is complete, generated defaults exist but authors cannot reliably override all shared flow, DNS, and HTTP details from
-YAML or Python scenario objects.
+The implemented Phase 3 boundary remains intentionally narrow: only `zeek` is supported as a source-specific output
+family, only the `linux-mini-lab` environment is accepted by the Zeek writer, and only `conn.log`, `dns.log`, and
+`http.log` are emitted. Apache, auditd, firewall, proxy, `ssl.log`, and `files.log` remain future work.
 
 ## Risks and Mitigations
 

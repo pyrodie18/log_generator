@@ -84,14 +84,14 @@ Rules:
 - Source-specific fields such as Zeek `uid`, Apache byte counts, auditd serial numbers, and firewall rule renderings
   should not be required in this file.
 
-The generic JSONL file is always available when a scenario successfully expands into source-neutral events. Source
-specific families are optional and depend on later generator support, requested output families, and environment
-visibility.
+The generic JSONL file is available when a scenario requests `generic-normalized` and successfully expands into
+source-neutral events. Source-specific families are optional and depend on implemented writer support, requested output
+families, and environment visibility.
 
 ## Source-Specific Output Paths
 
-Future source-specific generators should use the same source-first layout. For the `linux-mini-lab` template, expected
-paths include:
+Source-specific generators use the same source-first layout. Phase 3 implements Zeek under `zeek-sensor-01`; the other
+families shown below are reserved for future writers. For the `linux-mini-lab` template, expected paths include:
 
 ```text
 output/
@@ -198,7 +198,7 @@ Minimum shape:
 | `run` | yes | Run identifier, seed, and root path context. |
 | `scenarios` | yes | Scenario IDs, names, environment references, seeds, and time ranges. |
 | `requested_output_families` | yes | Output families requested by the scenario or calling code. |
-| `files` | yes | Generated log files, including generic normalized JSONL and future source-specific files. |
+| `files` | yes | Generated log files, including generic normalized JSONL and implemented source-specific files. |
 | `metadata_files` | yes | Generated metadata files such as scenario manifests and ground truth. |
 | `omitted_streams` | yes | Configured or requested streams skipped by the writer. Empty list when nothing was skipped. |
 
@@ -213,7 +213,7 @@ Each item in `files` should include:
 | `source_kind` | yes | `logical`, `host`, `sensor`, `network_device`, or another documented source category. |
 | `log_family` | yes | Output family name. |
 | `log_stream` | yes | Stream filename. |
-| `format` | yes | File format such as `jsonl`, `json`, `text`, or future `zeek-tsv`. |
+| `format` | yes | File format such as `jsonl`, `json`, `text`, or `zeek-tsv`. |
 | `record_count` | yes | Number of records written to the file. |
 | `timestamp_fields` | yes | Payload fields that represent record time. Empty list only when the file has no timestamp field. |
 | `scenario_ids` | yes | Scenarios that contributed records to the file. |
@@ -377,8 +377,8 @@ Expected records:
 
 ### Future Full-Family Misuse Run
 
-When a later implementation supports and requests `generic-normalized`, `zeek`, `apache`, `auditd`, and `firewall`,
-the misuse scenario can produce:
+When a later implementation adds Apache, auditd, and firewall writers, a run that requests `generic-normalized`,
+`zeek`, `apache`, `auditd`, and `firewall` can produce:
 
 ```text
 output/

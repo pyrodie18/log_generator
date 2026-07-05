@@ -266,7 +266,7 @@ def generate_from_yaml(
     environment_registry: Optional[EnvironmentRegistry] = None,
 ) -> Path:
     """
-    Generate the generic output tree from a YAML scenario file.
+    Generate the requested output tree from a YAML scenario file.
 
     Args:
         path (Path): YAML scenario file to load.

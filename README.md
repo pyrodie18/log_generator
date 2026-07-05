@@ -2,6 +2,12 @@
 
 `log_generator` creates deterministic source-neutral log datasets from Python fixtures or YAML scenario files.
 
+The built-in canonical data lives in YAML files:
+
+- Environment template: `environments/linux-mini-lab.yaml`
+- Scenario examples: `scenarios/canonical/benign-internal-web.yaml`
+- Scenario examples: `scenarios/canonical/local-account-misuse-web.yaml`
+
 ## YAML Scenario Generation
 
 Install the package in editable mode before using the command-line entry point:
@@ -41,8 +47,14 @@ Scenarios with answer-key records also include:
 metadata/ground-truth.jsonl
 ```
 
-To also generate native-style Zeek TSV for visible DNS and HTTP traffic, include `zeek` in the scenario
-`output_families` list:
+To also generate native-style Zeek TSV for visible DNS and HTTP traffic, copy or edit a scenario so
+`output_families` requests both supported families:
+
+```yaml
+output_families: [generic-normalized, zeek]
+```
+
+The expanded form is equivalent:
 
 ```yaml
 output_families:
@@ -50,7 +62,7 @@ output_families:
   - zeek
 ```
 
-Zeek output is written under the source-specific sensor path:
+With that setting, the run writes generic JSONL plus Zeek TSV files under the source-specific sensor path:
 
 ```text
 output/benign/
@@ -63,7 +75,8 @@ output/benign/
 ```
 
 Zeek-only scenarios are also supported with `output_families: [zeek]`. In that mode the generic normalized JSONL file is
-not written. Empty Zeek streams are reported in `manifest.json` and no empty log files are created.
+not written. Empty Zeek streams are reported in `manifest.json` with `omitted_streams` entries, and no empty log files
+are created.
 
 Use `--run-id` to set an explicit manifest run ID and `--generated-at` with a timezone-aware ISO 8601 timestamp for
 reproducible examples:
@@ -79,10 +92,10 @@ log-generator generate \
 Validation happens before output is written. Expected authoring errors are reported as concise `error:` messages with
 the scenario ID, field path, invalid value, and reason.
 
-Phase 3 Zeek output targets core Zeek 8.2.x and 8.0.x LTS-compatible TSV fields for `conn.log`, `dns.log`, and
-`http.log` in the `linux-mini-lab` environment. Local host-only events, such as local Linux login activity, do not
-produce Zeek network records. Zeek `ssl.log`, `files.log`, Apache, auditd, firewall, proxy, SIEM ingestion, and
-dashboard configuration remain future work.
+Phase 3 Zeek output targets core Zeek 8.2.x-compatible TSV fields, kept compatible with Zeek 8.0.x LTS, for
+`conn.log`, `dns.log`, and `http.log` in the `linux-mini-lab` environment. Local host-only events, such as local Linux
+login activity, do not produce Zeek network records. Zeek `ssl.log`, `files.log`, Apache, auditd, firewall, proxy, SIEM
+ingestion, parser configuration, collector setup, and dashboard configuration remain future work.
 
 ## Development
 

@@ -7,6 +7,8 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from log_generator.core.scenarios import (
     build_benign_internal_web_scenario,
     build_local_account_misuse_web_scenario,
@@ -38,6 +40,19 @@ def read_jsonl(path: Path) -> list[dict]:
         list[dict]: Parsed JSON records.
     """
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def count_zeek_data_rows(path: Path) -> int:
+    """
+    Count non-header rows in a Zeek TSV file.
+
+    Args:
+        path (Path): Zeek TSV file to inspect.
+
+    Returns:
+        int: Number of rendered Zeek records, excluding header and close lines.
+    """
+    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if not line.startswith("#"))
 
 
 def test_benign_manifest_omits_ground_truth_and_matches_written_files(tmp_path: Path) -> None:
@@ -220,10 +235,21 @@ def test_manifest_includes_zeek_files_when_requested(tmp_path: Path) -> None:
     ]
     assert manifest["requested_output_families"] == ["generic-normalized", "zeek"]
     assert files_by_path["logs/zeek-sensor-01/zeek/conn.log"]["record_count"] == 2
+    assert files_by_path["logs/zeek-sensor-01/zeek/conn.log"]["source_id"] == "zeek-sensor-01"
+    assert files_by_path["logs/zeek-sensor-01/zeek/conn.log"]["source_kind"] == "sensor"
+    assert files_by_path["logs/zeek-sensor-01/zeek/conn.log"]["log_family"] == "zeek"
     assert files_by_path["logs/zeek-sensor-01/zeek/conn.log"]["format"] == "zeek-tsv"
     assert files_by_path["logs/zeek-sensor-01/zeek/conn.log"]["timestamp_fields"] == ["ts"]
+    assert files_by_path["logs/zeek-sensor-01/zeek/conn.log"]["scenario_ids"] == [
+        "scenario-benign-internal-web"
+    ]
     assert files_by_path["logs/zeek-sensor-01/zeek/dns.log"]["event_types"] == ["dns_lookup"]
     assert files_by_path["logs/zeek-sensor-01/zeek/http.log"]["event_types"] == ["web_request"]
+
+    for file_path, file_entry in files_by_path.items():
+        if file_entry["format"] == "zeek-tsv":
+            assert file_entry["record_count"] == count_zeek_data_rows(tmp_path / file_path)
+
     assert manifest["omitted_streams"] == []
 
 
@@ -253,3 +279,114 @@ def test_zeek_only_manifest_skips_generic_output(tmp_path: Path) -> None:
     ]
     assert manifest["requested_output_families"] == ["zeek"]
     assert not (tmp_path / "logs" / "source-neutral-core" / "generic-normalized" / "events.jsonl").exists()
+
+
+def test_manifest_rejects_unsupported_output_family_before_writing_files(tmp_path: Path) -> None:
+    """
+    Verify Python callers cannot produce partial output for unsupported families.
+
+    Args:
+        tmp_path (Path): Pytest temporary output directory.
+
+    Returns:
+        None: This test asserts generation fails before file creation.
+    """
+    scenario = replace(
+        build_benign_internal_web_scenario(),
+        output_families=("generic-normalized", "apache"),
+    )
+
+    with pytest.raises(ValueError, match="unsupported output family 'apache'"):
+        write_output_manifest(
+            tmp_path,
+            (scenario,),
+            "run-unsupported-family-001",
+            generated_at=datetime(2026, 1, 15, 14, 0, 3, tzinfo=timezone.utc),
+        )
+
+    assert not (tmp_path / "manifest.json").exists()
+    assert not (tmp_path / "logs").exists()
+    assert not (tmp_path / "metadata").exists()
+
+
+def test_manifest_rejects_unsupported_zeek_environment_before_writing_files(tmp_path: Path) -> None:
+    """
+    Verify Zeek writer capability checks run before generic output is written.
+
+    Args:
+        tmp_path (Path): Pytest temporary output directory.
+
+    Returns:
+        None: This test asserts generation fails before file creation.
+    """
+    scenario = replace(
+        build_benign_internal_web_scenario(),
+        environment_version="9.9",
+        output_families=("generic-normalized", "zeek"),
+    )
+
+    with pytest.raises(ValueError, match="Zeek output currently supports linux-mini-lab version 0.1"):
+        write_output_manifest(
+            tmp_path,
+            (scenario,),
+            "run-unsupported-zeek-environment-001",
+            generated_at=datetime(2026, 1, 15, 14, 0, 3, tzinfo=timezone.utc),
+        )
+
+    assert not (tmp_path / "manifest.json").exists()
+    assert not (tmp_path / "logs").exists()
+    assert not (tmp_path / "metadata").exists()
+
+
+def test_manifest_includes_structured_zeek_omitted_streams(tmp_path: Path) -> None:
+    """
+    Verify requested Zeek streams with no records are described in the manifest.
+
+    Args:
+        tmp_path (Path): Pytest temporary output directory.
+
+    Returns:
+        None: This test asserts omitted-stream manifest entries directly.
+    """
+    misuse_scenario = build_local_account_misuse_web_scenario()
+    scenario = replace(misuse_scenario, events=misuse_scenario.events[:1], output_families=("zeek",))
+    manifest_path = write_output_manifest(
+        tmp_path,
+        (scenario,),
+        "run-zeek-empty-001",
+        generated_at=datetime(2026, 1, 15, 3, 12, 29, tzinfo=timezone.utc),
+    )
+    manifest = read_json(manifest_path)
+
+    assert manifest["files"] == []
+    assert manifest["requested_output_families"] == ["zeek"]
+    assert manifest["omitted_streams"] == [
+        {
+            "source_id": "zeek-sensor-01",
+            "source_kind": "sensor",
+            "log_family": "zeek",
+            "log_stream": "conn.log",
+            "reason": "zero_records",
+            "requested": True,
+            "configured": True,
+        },
+        {
+            "source_id": "zeek-sensor-01",
+            "source_kind": "sensor",
+            "log_family": "zeek",
+            "log_stream": "dns.log",
+            "reason": "zero_records",
+            "requested": True,
+            "configured": True,
+        },
+        {
+            "source_id": "zeek-sensor-01",
+            "source_kind": "sensor",
+            "log_family": "zeek",
+            "log_stream": "http.log",
+            "reason": "zero_records",
+            "requested": True,
+            "configured": True,
+        },
+    ]
+    assert not (tmp_path / "logs" / "zeek-sensor-01").exists()

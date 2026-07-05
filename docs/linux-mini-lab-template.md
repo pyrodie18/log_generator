@@ -17,7 +17,8 @@ The template should support the first canonical scenarios:
 - Use stable IDs, IP addresses, hostnames, and service names so tests can assert exact values.
 - Make every valid scenario reference resolvable through the environment.
 - Make impossible activity easy to reject during validation.
-- Provide enough network, service, and policy detail for future Zeek, Apache, auditd, and firewall generators.
+- Provide enough network, service, and policy detail for current Zeek output and future Apache, auditd, and firewall
+  generators.
 - Keep downstream ingestion concerns outside the template. Directory structure and metadata should be clear to humans.
 
 ## Template Identity
@@ -198,8 +199,8 @@ matches a deny rule.
 | `workstation-vlan` | `internet` | no | Boundary firewall telemetry covers external traffic in this template. |
 | `monitoring-vlan` | any | no | Sensor management traffic is out of scope for MVP scenarios. |
 
-Visibility means the sensor can generate network records if a future generator supports the event type. It does not
-mean every event must produce a Zeek record.
+Visibility means the sensor can generate Zeek network records for event types supported by the current writer. It does
+not mean every event must produce a Zeek record.
 
 ## Expected Output Paths
 

@@ -1,0 +1,267 @@
+schema_version: environment/v0.1
+id: linux-mini-lab
+version: "0.1"
+display_name: Linux Mini Lab
+domain: internal
+timezone: UTC
+environment_type: small-internal-lab
+zones:
+  - id: workstation-vlan
+    display_name: Workstation VLAN
+    cidr: 10.10.10.0/24
+    zone_type: internal
+    purpose: Linux user workstations.
+    hosts:
+      - id: linux-ws-01
+        hostname: linux-ws-01
+        fqdn: linux-ws-01.internal
+        zone_id: workstation-vlan
+        primary_ip: 10.10.10.11
+        os: ubuntu-linux
+        roles: [workstation]
+        logging_profiles: [profile-auditd-only]
+      - id: linux-ws-02
+        hostname: linux-ws-02
+        fqdn: linux-ws-02.internal
+        zone_id: workstation-vlan
+        primary_ip: 10.10.10.12
+        os: ubuntu-linux
+        roles: [workstation]
+        logging_profiles: [profile-auditd-only]
+  - id: server-vlan
+    display_name: Server VLAN
+    cidr: 10.10.20.0/24
+    zone_type: internal
+    purpose: Internal application and infrastructure services.
+    hosts:
+      - id: web-server-01
+        hostname: web-server-01
+        fqdn: web-server-01.internal
+        zone_id: server-vlan
+        primary_ip: 10.10.20.21
+        os: ubuntu-linux
+        roles: [web-server]
+        logging_profiles: [profile-apache-auditd]
+      - id: lab-dns-01
+        hostname: lab-dns-01
+        fqdn: lab-dns-01.internal
+        zone_id: server-vlan
+        primary_ip: 10.10.20.53
+        os: ubuntu-linux
+        roles: [dns-resolver]
+        logging_profiles: []
+  - id: monitoring-vlan
+    display_name: Monitoring VLAN
+    cidr: 10.10.30.0/24
+    zone_type: internal
+    purpose: Sensor management and monitoring interfaces.
+    hosts:
+      - id: zeek-sensor-01
+        hostname: zeek-sensor-01
+        fqdn: zeek-sensor-01.internal
+        zone_id: monitoring-vlan
+        primary_ip: 10.10.30.31
+        os: zeek-sensor
+        roles: [network-sensor]
+        logging_profiles: [profile-zeek-only]
+  - id: internet
+    display_name: Internet
+    cidr:
+    zone_type: external
+    purpose: External resources outside the lab boundary.
+    hosts: []
+users:
+  - id: user-alice
+    username: alice
+    display_name: Alice Adams
+    account_type: local-user
+    login_hosts: [linux-ws-01]
+    normal_login_hosts: [linux-ws-01]
+  - id: user-bob
+    username: bob
+    display_name: Bob Brown
+    account_type: local-user
+    login_hosts: [linux-ws-01]
+    normal_login_hosts: [linux-ws-01]
+  - id: user-carol
+    username: carol
+    display_name: Carol Clark
+    account_type: local-user
+    login_hosts: [linux-ws-02]
+    normal_login_hosts: [linux-ws-02]
+  - id: user-www-data
+    username: www-data
+    display_name: Apache Runtime User
+    account_type: service-account
+    login_hosts: [web-server-01]
+    normal_login_hosts: []
+groups:
+  - id: group-workstation-users
+    name: workstation-users
+    members: [user-alice, user-bob, user-carol]
+    purpose: Normal interactive workstation users.
+  - id: group-web-runtime
+    name: web-runtime
+    members: [user-www-data]
+    purpose: Runtime identity for the Apache service.
+services:
+  - id: svc-web-http
+    name: Internal Apache HTTP
+    target_host_id: web-server-01
+    port: 80
+    transport_protocol: tcp
+    application_protocol: http
+    names: [web-server-01.internal]
+    visibility: [zeek, apache]
+    routes:
+      - method: GET
+        path: /
+        default_status: 200
+        purpose: Homepage
+      - method: GET
+        path: /about
+        default_status: 200
+        purpose: Static informational page
+      - method: GET
+        path: /admin
+        default_status: 200
+        purpose: Administrative page
+      - method: GET
+        path: /login
+        default_status: 403
+        purpose: Denied login portal access attempt
+      - method: GET
+        path: /admin/archive.tar.gz
+        default_status: 200
+        purpose: Suspicious archive download
+      - method: GET
+        path: /missing
+        default_status: 404
+        purpose: Missing page
+  - id: svc-web-ssh
+    name: Web Server SSH
+    target_host_id: web-server-01
+    port: 22
+    transport_protocol: tcp
+    application_protocol: ssh
+    names: [web-server-01.internal]
+    visibility: [zeek, auditd]
+    routes: []
+  - id: svc-dns
+    name: Internal DNS Resolver
+    target_host_id: lab-dns-01
+    port: 53
+    transport_protocol: udp
+    application_protocol: dns
+    names: [lab-dns-01.internal]
+    visibility: [zeek]
+    routes: []
+dns_records:
+  - name: linux-ws-01.internal
+    record_type: A
+    value: 10.10.10.11
+  - name: linux-ws-02.internal
+    record_type: A
+    value: 10.10.10.12
+  - name: web-server-01.internal
+    record_type: A
+    value: 10.10.20.21
+  - name: zeek-sensor-01.internal
+    record_type: A
+    value: 10.10.30.31
+  - name: lab-dns-01.internal
+    record_type: A
+    value: 10.10.20.53
+logging_profiles:
+  - id: profile-zeek-only
+    families:
+      - name: zeek
+        streams: [conn.log, dns.log, http.log]
+  - id: profile-auditd-only
+    families:
+      - name: auditd
+        streams: [audit.log]
+  - id: profile-apache-auditd
+    families:
+      - name: apache
+        streams: [access.log, error.log]
+      - name: auditd
+        streams: [audit.log]
+  - id: profile-firewall-traffic
+    families:
+      - name: firewall
+        streams: [traffic.log]
+network_devices:
+  - id: boundary-fw-01
+    device_type: firewall
+    interfaces:
+      - zone_id: workstation-vlan
+        ip: 10.10.10.1
+      - zone_id: server-vlan
+        ip: 10.10.20.1
+      - zone_id: internet
+        ip: 203.0.113.10
+    logging_profiles: [profile-firewall-traffic]
+    policies:
+      - id: allow-workstations-dns
+        source_zones: [workstation-vlan]
+        destination_zones: [server-vlan]
+        protocols: [udp]
+        destination_ports: ["53"]
+        action: allow
+        logging: true
+      - id: allow-workstations-internal-web
+        source_zones: [workstation-vlan]
+        destination_zones: [server-vlan]
+        protocols: [tcp]
+        destination_ports: ["80"]
+        action: allow
+        logging: true
+      - id: allow-workstations-external-web
+        source_zones: [workstation-vlan]
+        destination_zones: [internet]
+        protocols: [tcp]
+        destination_ports: ["80", "443"]
+        action: allow
+        logging: true
+        nat:
+          type: source_nat
+          translated_source_ip: 203.0.113.10
+      - id: deny-workstations-other
+        source_zones: [workstation-vlan]
+        destination_zones: [any]
+        protocols: [any]
+        destination_ports: [any]
+        action: deny
+        logging: true
+sensor_visibility:
+  - sensor_id: zeek-sensor-01
+    source_zone_id: workstation-vlan
+    destination_zone_id: server-vlan
+    visible: true
+    notes: Required for DNS and web scenarios.
+  - sensor_id: zeek-sensor-01
+    source_zone_id: server-vlan
+    destination_zone_id: workstation-vlan
+    visible: true
+    notes: Required for response-side connection metadata.
+  - sensor_id: zeek-sensor-01
+    source_zone_id: workstation-vlan
+    destination_zone_id: workstation-vlan
+    visible: true
+    notes: Useful for future lateral or peer traffic scenarios.
+  - sensor_id: zeek-sensor-01
+    source_zone_id: server-vlan
+    destination_zone_id: server-vlan
+    visible: true
+    notes: No MVP scenario currently depends on this path.
+  - sensor_id: zeek-sensor-01
+    source_zone_id: workstation-vlan
+    destination_zone_id: internet
+    visible: false
+    notes: Boundary firewall telemetry covers external traffic in this template.
+  - sensor_id: zeek-sensor-01
+    source_zone_id: monitoring-vlan
+    destination_zone_id: any
+    visible: false
+    notes: Sensor management traffic is out of scope for MVP scenarios.

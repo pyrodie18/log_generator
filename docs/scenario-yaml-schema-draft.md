@@ -527,7 +527,7 @@ actionable reason.
 - Generated helper timestamps must not sort after their dependent authored event.
 - A generated DNS lookup for a known internal service must resolve through environment DNS records.
 - A generated network connection must use the service target host, IP address, port, and protocol.
-- Sensor visibility should be checked before future source-specific Zeek records are expected.
+- Sensor visibility should be checked before source-specific Zeek records are expected.
 - Firewall policy should be checked before future source-specific firewall records are expected.
 - Download classification should be derived from `web_request.path` and should not require a separate event type.
 

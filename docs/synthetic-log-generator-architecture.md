@@ -596,8 +596,8 @@ attack_chain:
     technique_name: Ingress Tool Transfer
 ```
 
-Phase 3 should allow YAML scenarios to add `zeek` to `output_families`. Apache, auditd, firewall, and proxy families
-should remain rejected until their generators exist.
+Phase 3 allows YAML scenarios to add `zeek` to `output_families`. Apache, auditd, firewall, and proxy families remain
+rejected until their generators exist.
 
 ### Noise YAML Example
 
@@ -1068,7 +1068,7 @@ Acceptance criteria:
 
 Goal: generate native-style Zeek TSV logs for common web activity.
 
-Status: planned in `docs/phase-3-planning.md`.
+Status: complete. See `docs/phase-3-planning.md` for the implemented scope and acceptance criteria.
 
 Major tasks:
 
@@ -1329,11 +1329,10 @@ Acceptance criteria:
 
 ## Recommended Next Steps
 
-1. Implement Phase 3 from `docs/phase-3-planning.md`: Zeek native-style TSV `conn.log`, `dns.log`, and `http.log`.
-2. Update YAML output-family validation so `zeek` is supported and other source-specific families remain explicit
-   unsupported errors.
-3. Extend manifest writing so generated Zeek files and omitted requested Zeek streams are described correctly.
-4. Add canonical Zeek tests for benign internal web browsing and local account misuse.
-5. Update README examples for `output_families: [generic-normalized, zeek]`.
-6. After Phase 3, choose either Zeek `files.log`/`ssl.log` or Linux auditd/Apache as the next source-specific target
-   based on the next canonical scenario need.
+Phase 3 from `docs/phase-3-planning.md` is implemented: scenarios can request Zeek native-style TSV output for
+`conn.log`, `dns.log`, and `http.log`, manifests describe generated and omitted Zeek streams, and README examples cover
+`output_families: [generic-normalized, zeek]`.
+
+The next source-specific phase should choose either Zeek `files.log`/`ssl.log` or Linux auditd/Apache based on the next
+canonical scenario need. That work should preserve the current Phase 3 boundary: source-specific family names other
+than `zeek` remain explicit unsupported errors until their writers exist.
