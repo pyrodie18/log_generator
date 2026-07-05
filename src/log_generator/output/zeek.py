@@ -289,6 +289,7 @@ def write_zeek_logs(
         return ZeekWriteResult(files=(), omitted_streams=())
 
     if generated_at is None:
+        # Zeek headers include open/close wall-clock times, so normalize once before rendering every stream.
         generated_at = datetime.now(timezone.utc)
 
     generated_at = normalize_utc_timestamp(generated_at)
@@ -301,6 +302,7 @@ def write_zeek_logs(
         file_name = ZEEK_STREAM_FILE_NAMES[stream_name]
 
         if not records:
+            # Empty requested streams are represented in the manifest instead of creating header-only log files.
             omitted_streams.append(
                 ZeekOmittedStream(
                     source_id=ZEEK_SENSOR_ID,
@@ -345,12 +347,15 @@ def build_zeek_records(
     for scenario in scenarios:
         environment = _environment_for_scenario(scenario)
         ordered_scenario_events = tuple(sorted(scenario.events, key=ScenarioEvent.sort_key))
+        # Parent and flow lookups need fast access to already-expanded source-neutral events.
         events_by_id = {
             scenario_event.event.event_id: scenario_event.event for scenario_event in ordered_scenario_events
         }
         flow_contexts = _build_flow_contexts(scenario, environment, ordered_scenario_events)
         web_requests_by_flow_key = _web_requests_by_http_flow_key(ordered_scenario_events, events_by_id)
+        # Zeek trans_depth increments per HTTP flow UID, not globally across the scenario.
         http_depths: dict[str, int] = {}
+        # A DNS, connection, or standalone HTTP event may all describe the same Zeek conn.log row.
         emitted_conn_uids: set[str] = set()
 
         for scenario_event in ordered_scenario_events:
@@ -360,9 +365,11 @@ def build_zeek_records(
                 flow_context = flow_contexts.get(_dns_flow_key(event))
 
                 if flow_context is None or not _flow_is_visible(environment, flow_context):
+                    # Invisible traffic should not emit partial DNS or connection records.
                     continue
 
                 if flow_context.uid not in emitted_conn_uids:
+                    # Zeek emits conn.log alongside dns.log for the same DNS transaction.
                     _append_record(
                         records_by_stream,
                         event_types_by_stream,
@@ -386,6 +393,7 @@ def build_zeek_records(
                     continue
 
                 if flow_context.uid in emitted_conn_uids:
+                    # DNS or HTTP handling may have already emitted the shared conn.log row.
                     continue
 
                 web_requests = _web_requests_for_connection(events_by_id.values(), event.event_id)
@@ -408,6 +416,7 @@ def build_zeek_records(
                 needs_sibling_conn = not _web_request_uses_connection_event(event, events_by_id)
 
                 if needs_sibling_conn and flow_context.uid not in emitted_conn_uids:
+                    # Standalone HTTP events still need a synthesized conn.log row for native Zeek shape.
                     _append_record(
                         records_by_stream,
                         event_types_by_stream,
@@ -423,6 +432,7 @@ def build_zeek_records(
 
                 depth_key = flow_context.uid
                 http_depths[depth_key] = http_depths.get(depth_key, 0) + 1
+                # Multiple HTTP requests over one connection share a UID and advance transaction depth.
                 _append_record(
                     records_by_stream,
                     event_types_by_stream,
@@ -437,6 +447,7 @@ def build_zeek_records(
                 )
 
     for stream_name, records in records_by_stream.items():
+        # Build in source-neutral order, then sort per stream so output is stable even across scenarios.
         records_by_stream[stream_name] = sorted(records, key=_zeek_record_sort_key)
 
     return records_by_stream, event_types_by_stream
@@ -486,6 +497,7 @@ def _build_flow_contexts(
     contexts = {}
     connection_contexts_by_event_id = {}
 
+    # First collect explicit network flows because HTTP events may parent to them.
     for scenario_event in ordered_scenario_events:
         event = scenario_event.event
 
@@ -499,6 +511,7 @@ def _build_flow_contexts(
             contexts[_connection_flow_key(event)] = context
             connection_contexts_by_event_id[event.event_id] = context
 
+    # Then attach HTTP requests either to their parent connection or to a synthesized standalone flow.
     for scenario_event in ordered_scenario_events:
         event = scenario_event.event
 
@@ -605,11 +618,13 @@ def _build_http_flow_context(
     service = environment.get_service(event.service_id)
 
     if source_host is None or service is None:
+        # Semantic validation should catch this earlier; writers stay defensive for direct callers.
         return None
 
     destination_host = environment.get_host(event.destination_host_id or service.target_host_id)
 
     if destination_host is None:
+        # Without a destination host, the sensor visibility and responder fields cannot be rendered.
         return None
 
     return ZeekFlowContext(
@@ -644,6 +659,7 @@ def _dns_conn_record(
     """
     response_size = 120 + 16 * len(event.resolved_addresses or ())
 
+    # DNS connection byte counts are small deterministic estimates unless explicitly authored.
     return _conn_record(
         event=event,
         flow_context=flow_context,
@@ -735,11 +751,13 @@ def _web_flow_conn_record(
         dict[str, Any]: Zeek conn.log record.
     """
     if web_requests:
+        # Estimate the flow from the HTTP transactions that ride over the connection.
         last_request_time = max(web_request.timestamp for web_request in web_requests)
         duration = max((last_request_time - timestamp).total_seconds() + 0.05, 0.001)
         orig_bytes = sum(_http_request_size(web_request) for web_request in web_requests)
         resp_bytes = sum(_http_response_size(web_request) for web_request in web_requests)
     else:
+        # Bare connection events still need plausible non-zero packet and byte counts.
         duration = 0.050
         orig_bytes = 60
         resp_bytes = 60
@@ -906,6 +924,7 @@ def _http_record(
     http = event.http
 
     if response_file_name is not None:
+        # Zeek file IDs are stable per scenario event so repeated runs render identical http.log rows.
         response_file_id = "F" + sha1(f"{event.scenario_id}:{event.event_id}:file".encode("utf-8")).hexdigest()[:10]
 
     return {
@@ -992,6 +1011,7 @@ def _flow_is_visible(environment: Environment, flow_context: ZeekFlowContext) ->
     destination_host = environment.get_host(flow_context.destination_host_id)
 
     if source_host is None or destination_host is None:
+        # Unknown hosts cannot be mapped to zones, so the sensor cannot safely claim visibility.
         return False
 
     for visibility in environment.sensor_visibility:
@@ -1002,6 +1022,7 @@ def _flow_is_visible(environment: Environment, flow_context: ZeekFlowContext) ->
             continue
 
         if visibility.destination_zone_id in {destination_host.zone_id, "any"}:
+            # The first matching rule for this sensor decides whether the flow is observable.
             return visibility.visible
 
     return False
@@ -1053,6 +1074,7 @@ def _web_requests_by_http_flow_key(
             continue
 
         flow_key = _http_flow_key(event, events_by_id)
+        # Grouping lets a synthesized conn.log record account for every HTTP request on that flow.
         grouped_requests.setdefault(flow_key, []).append(event)
 
     return {flow_key: tuple(web_requests) for flow_key, web_requests in grouped_requests.items()}
@@ -1119,8 +1141,10 @@ def _http_flow_key(
         str: Flow key.
     """
     if _web_request_uses_connection_event(event, events_by_id):
+        # Requests with explicit connection parents share the parent's Zeek UID.
         return _http_connection_flow_key(str(event.parent_event_id))
 
+    # Standalone requests each receive their own synthesized flow.
     return _http_standalone_flow_key(event)
 
 
@@ -1628,6 +1652,7 @@ def render_zeek_value(value: Any, zeek_type: str) -> str:
         str: Zeek TSV field text.
     """
     if zeek_type.startswith("set["):
+        # Collection types handle None/empty differently from scalar fields in Zeek TSV.
         return render_zeek_set(value, _collection_inner_type(zeek_type, "set"))
 
     if zeek_type.startswith("vector["):

@@ -93,6 +93,7 @@ def validate_scenario(scenario: Scenario, environment: Environment) -> list[Vali
             )
         )
 
+    # Event validation is separate so callers can validate prebuilt event tuples without a Scenario object.
     errors.extend(validate_events(scenario.id, scenario.ordered_events(), environment))
 
     return errors
@@ -121,6 +122,7 @@ def validate_events(
         parent_event_id = getattr(event, "parent_event_id", None)
 
         if parent_event_id is not None and parent_event_id not in earlier_event_ids:
+            # Parent relationships are causal references, so they must point to an event already seen.
             errors.append(
                 _error(
                     scenario_id,
@@ -173,8 +175,10 @@ def _validate_event(
     actor_user_id = getattr(event, "actor_user_id", None)
 
     if actor_user_id is not None and not isinstance(event, LinuxLocalLoginEvent):
+        # Login events validate actor permissions in their own branch because they need target host context too.
         _require_user(scenario_id, event, "actor_user_id", actor_user_id, environment, errors)
 
+    # Dispatch after common actor checks so every event type can report its own environment constraints.
     if isinstance(event, DnsLookupEvent):
         errors.extend(_validate_dns_lookup(scenario_id, event, environment))
     elif isinstance(event, NetworkConnectionEvent):
@@ -223,6 +227,7 @@ def _validate_dns_lookup(
         service = _require_service(scenario_id, event, "service_id", event.service_id, environment, errors)
 
     if service is not None:
+        # DNS events should point at a DNS service and, when a host is supplied, that service's host.
         if service.application_protocol != "dns":
             errors.append(
                 _error(
@@ -236,6 +241,7 @@ def _validate_dns_lookup(
         _validate_service_host_conflict(scenario_id, event, service, destination_host, errors)
 
     if _is_internal_a_lookup(event, environment):
+        # Internal successful A lookups should match the environment's authoritative DNS records.
         dns_record = environment.get_dns_record(event.query_name, event.query_type)
 
         if dns_record is None:
@@ -305,6 +311,7 @@ def _validate_network_connection(
         )
 
     if destination_host is not None and event.destination_ip != destination_host.primary_ip:
+        # When a destination host is named, the emitted IP must stay in sync with that host.
         errors.append(
             _error(
                 scenario_id,
@@ -321,6 +328,7 @@ def _validate_network_connection(
         service = _require_service(scenario_id, event, "service_id", event.service_id, environment, errors)
 
     if service is not None:
+        # Service checks compare the connection tuple against the environment's declared listener.
         _validate_network_service_conflicts(scenario_id, event, service, destination_host, environment, errors)
 
     return errors
@@ -359,6 +367,7 @@ def _validate_web_request(
         )
 
     if service is None:
+        # Without a service there is no reliable route or destination-host context to validate.
         return errors
 
     if service.application_protocol != "http":
@@ -371,6 +380,7 @@ def _validate_web_request(
             )
         )
     else:
+        # Source-neutral web events represent known routes in the modeled HTTP service.
         route = environment.get_http_route(service.id, event.method, event.path)
 
         if route is None:
@@ -422,6 +432,7 @@ def _validate_linux_local_login(
         source_host = _require_host(scenario_id, event, "source_host_id", event.source_host_id, environment, errors)
 
     if source_host is not None and event.source_ip is not None and event.source_ip != source_host.primary_ip:
+        # Remote login source details are optional, but supplied host/IP pairs must agree.
         errors.append(
             _error(
                 scenario_id,
@@ -432,6 +443,7 @@ def _validate_linux_local_login(
         )
 
     if event.status == "success" and user is not None and target_host is not None:
+        # Failed attempts can target unusual hosts; successful local logins must be allowed for that user.
         if target_host.id not in user.login_hosts:
             errors.append(
                 _error(
@@ -470,8 +482,10 @@ def _validate_network_service_conflicts(
     service_host = environment.get_host(service.target_host_id)
 
     if destination_host is not None:
+        # Prefer explicit destination-host validation when the event supplied a host reference.
         _validate_service_host_conflict(scenario_id, event, service, destination_host, errors)
     elif service_host is not None and event.destination_ip != service_host.primary_ip:
+        # Hostless events can still be checked against the service's target host IP.
         errors.append(
             _error(
                 scenario_id,
@@ -565,6 +579,7 @@ def _validate_successful_dns_answer(
         None: Errors are appended to the provided list.
     """
     if not event.resolved_addresses:
+        # A successful internal lookup without addresses is semantically different from NXDOMAIN.
         errors.append(
             _error(
                 scenario_id,

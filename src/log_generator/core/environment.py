@@ -461,6 +461,7 @@ def build_linux_mini_lab() -> Environment:
     Returns:
         Environment: Complete linux-mini-lab environment definition.
     """
+    # Hosts are declared first so zones, services, DNS records, and sensor rules can refer to stable IDs.
     linux_ws_01 = Host(
         id="linux-ws-01",
         hostname="linux-ws-01",
@@ -512,6 +513,7 @@ def build_linux_mini_lab() -> Environment:
         logging_profiles=("profile-zeek-only",),
     )
 
+    # Zones define both addressing boundaries and the visibility model used by source-specific writers.
     zones = (
         NetworkZone(
             id="workstation-vlan",
@@ -547,6 +549,7 @@ def build_linux_mini_lab() -> Environment:
         ),
     )
 
+    # HTTP routes provide deterministic defaults for authored web_request events that omit status_code.
     routes = (
         HttpRoute(method="GET", path="/", default_status=200, purpose="Homepage"),
         HttpRoute(method="GET", path="/about", default_status=200, purpose="Static informational page"),
@@ -561,6 +564,7 @@ def build_linux_mini_lab() -> Environment:
         HttpRoute(method="GET", path="/missing", default_status=404, purpose="Missing page"),
     )
 
+    # Firewall policy is included for future source-specific outputs and to document intended network paths.
     network_devices = (
         NetworkDevice(
             id="boundary-fw-01",
@@ -622,6 +626,7 @@ def build_linux_mini_lab() -> Environment:
         environment_type="small-internal-lab",
         zones=zones,
         users=(
+            # Alice and Bob share a normal workstation; Carol's separate host lets tests detect bad references.
             User(
                 id="user-alice",
                 username="alice",
@@ -670,6 +675,7 @@ def build_linux_mini_lab() -> Environment:
             ),
         ),
         services=(
+            # The web and DNS services are the minimum service set needed by canonical web scenarios.
             Service(
                 id="svc-web-http",
                 name="Internal Apache HTTP",
@@ -703,6 +709,7 @@ def build_linux_mini_lab() -> Environment:
             ),
         ),
         dns_records=(
+            # Internal A records back DNS validation and generated Zeek dns.log answers.
             DnsRecord(name="linux-ws-01.internal", record_type="A", value="10.10.10.11"),
             DnsRecord(name="linux-ws-02.internal", record_type="A", value="10.10.10.12"),
             DnsRecord(name="web-server-01.internal", record_type="A", value="10.10.20.21"),
@@ -710,6 +717,7 @@ def build_linux_mini_lab() -> Environment:
             DnsRecord(name="lab-dns-01.internal", record_type="A", value="10.10.20.53"),
         ),
         logging_profiles=(
+            # Profiles advertise which source-specific families can eventually be rendered for each host.
             LoggingProfile(
                 id="profile-zeek-only",
                 families=(LoggingFamily(name="zeek", streams=("conn.log", "dns.log", "http.log")),),
@@ -732,6 +740,7 @@ def build_linux_mini_lab() -> Environment:
         ),
         network_devices=network_devices,
         sensor_visibility=(
+            # Zeek output only emits flows visible to zeek-sensor-01 according to these zone pairs.
             SensorVisibility(
                 sensor_id="zeek-sensor-01",
                 source_zone_id="workstation-vlan",

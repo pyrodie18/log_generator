@@ -42,11 +42,13 @@ def write_output_manifest(
     """
     generated_at = _normalize_generated_at(generated_at)
     events_path = None
+    # Generic normalized output is shared across scenarios, but only scenarios requesting it are included.
     generic_scenarios = tuple(scenario for scenario in scenarios if "generic-normalized" in scenario.output_families)
 
     if generic_scenarios:
         events_path = write_generic_normalized_events(output_root, generic_scenarios)
 
+    # Zeek writer returns both written files and intentionally omitted streams for manifest transparency.
     zeek_result = write_zeek_logs(output_root, scenarios, generated_at=generated_at)
     scenario_manifest_path = write_scenario_manifest(output_root, scenarios)
     ground_truth_path = write_ground_truth(output_root, scenarios)
@@ -107,6 +109,7 @@ def write_ground_truth(output_root: Path, scenarios: tuple[Scenario, ...]) -> Op
     answer_key_records = []
 
     for scenario in scenarios:
+        # Flatten records across scenarios so the file remains a simple JSON Lines stream.
         answer_key_records.extend(record.to_dict() for record in scenario.answer_key)
 
     if not answer_key_records:
@@ -160,6 +163,7 @@ def build_manifest(
     ]
 
     if ground_truth_path is not None:
+        # Count lines after writing so the manifest describes the exact file on disk.
         metadata_files.append(
             {
                 "path": _relative_output_path(output_root, ground_truth_path),
@@ -173,6 +177,7 @@ def build_manifest(
     if events_path is not None:
         files.append(_generic_events_file_entry(output_root, events_path, generic_scenarios))
 
+    # Source-specific writers decide which streams are present; the manifest only records their results.
     files.extend(_zeek_file_entry(output_root, zeek_file) for zeek_file in zeek_result.files)
 
     return {

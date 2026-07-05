@@ -341,11 +341,13 @@ def parse_scenario_yaml_document(
     errors: list[ScenarioYamlValidationError] = []
     scenario_id = _scenario_id_for_errors(document)
 
+    # Confirm the root shape before reading fields so later validation can assume mapping access is safe.
     _require_mapping(document, "<document>", scenario_id, errors)
 
     if errors:
         raise ScenarioYamlError(errors)
 
+    # Collect all structural top-level errors first so authors get a complete report in one run.
     _validate_top_level_fields(document, scenario_id, errors)
 
     schema_version = _required_string(document, "schema_version", scenario_id, errors)
@@ -374,6 +376,7 @@ def parse_scenario_yaml_document(
     answer_key = _optional_mapping_sequence(document, "answer_key", scenario_id, errors)
 
     if errors:
+        # Stop before environment-aware validation when required structural fields are missing.
         raise ScenarioYamlError(errors)
 
     parsed = ParsedScenarioYaml(
@@ -399,6 +402,7 @@ def parse_scenario_yaml_document(
     )
 
     if environment_errors:
+        # Environment checks need a complete parsed scenario because they resolve cross-field references.
         raise ScenarioYamlError(environment_errors)
 
     return parsed
@@ -425,6 +429,7 @@ def build_scenario_from_parsed_yaml(
             [_error(parsed.scenario_id, "environment.id", parsed.environment_id, "unknown environment")]
         )
 
+    # YAML web requests are authored at a higher level; expansion adds DNS and connection helpers as needed.
     authored_events = _build_authored_events(parsed)
     expanded_events = expand_authored_events(
         scenario_id=parsed.scenario_id,
@@ -432,6 +437,7 @@ def build_scenario_from_parsed_yaml(
         environment=environment,
         authored_events=authored_events,
     )
+    # Metadata references are validated after expansion because helper events may become valid targets.
     metadata_errors = _validate_metadata_references(parsed, expanded_events)
 
     if metadata_errors:
@@ -469,6 +475,7 @@ def _build_authored_events(parsed: ParsedScenarioYaml) -> tuple[AuthoredEvent, .
     all_authored_event_ids = {event.event_id for event in parsed.events}
 
     for parsed_event in parsed.events:
+        # Correlation IDs can be explicit, inherited from a parent, or deterministically generated.
         correlation_id = _event_correlation_id(parsed, parsed_event, correlation_ids_by_event_id)
         parent_event_id = parsed_event.after
 
@@ -503,6 +510,7 @@ def _build_authored_events(parsed: ParsedScenarioYaml) -> tuple[AuthoredEvent, .
 
         if authored_event is not None:
             authored_events.append(authored_event)
+            # Store after successful conversion so children inherit only usable parent correlation IDs.
             correlation_ids_by_event_id[parsed_event.event_id] = correlation_id
 
     if errors:
@@ -840,6 +848,7 @@ def _build_authored_web_request(
     dns = _optional_dns_context(parsed, parsed_event, errors)
     http = _optional_http_context(parsed, parsed_event, errors)
 
+    # Return no event when required fields are invalid; accumulated errors describe the missing pieces.
     if not all((actor_user_id, source_host_id, service_id, method, path)):
         return None
 
@@ -913,6 +922,7 @@ def _build_linux_local_login_event(
             )
         )
 
+    # Required reference checks and optional IP validation are reported separately for clearer author feedback.
     if not all((actor_user_id, target_host_id, login_method)):
         return None
 
@@ -1202,6 +1212,7 @@ def _optional_network_context(
     _validate_context_non_negative(parsed, "resp_pkts", resp_pkts, field_path, errors)
 
     if len(errors) > error_count:
+        # Avoid constructing a NetworkContext that would raise before all YAML errors are reported.
         return None
 
     return NetworkContext(
@@ -1255,6 +1266,7 @@ def _optional_dns_context(
             _validate_context_non_negative_number(parsed, f"ttls[{index}]", ttl, field_path, errors)
 
     if len(errors) > error_count:
+        # Keep parsing tolerant: validation errors are accumulated instead of failing in the dataclass.
         return None
 
     return DnsContext(trans_id=trans_id, rtt=rtt, ttls=ttls, flags=flags)
@@ -1303,6 +1315,7 @@ def _optional_http_context(
     _validate_context_non_negative(parsed, "response_body_len", response_body_len, field_path, errors)
 
     if len(errors) > error_count:
+        # Do not create partial HTTP context when any nested field was malformed.
         return None
 
     return HttpContext(
@@ -1622,6 +1635,7 @@ def _validate_parsed_scenario_environment(
     event_types_by_id = {event.event_id: event.event_type for event in parsed.events}
 
     for parsed_event in parsed.events:
+        # Attack metadata is type-independent, then each event type gets environment-specific checks.
         _validate_attack_metadata(parsed.scenario_id, parsed_event, errors)
 
         if parsed_event.event_type == "web_request":
@@ -1664,6 +1678,7 @@ def _validate_yaml_web_request(
     _require_environment_host(parsed.scenario_id, parsed_event, "source_host", source_host_id, environment, errors)
 
     if service_id is not None:
+        # The service must be an HTTP service with a real target host before route validation is meaningful.
         service = environment.get_service(service_id)
 
         if service is None:
@@ -1703,6 +1718,7 @@ def _validate_yaml_web_request(
     _optional_string_mapping(parsed, parsed_event, "headers", errors)
 
     if service is not None and service.application_protocol == "http" and method is not None and path is not None:
+        # Unknown routes are allowed only when the author supplies an explicit status_code override.
         route = environment.get_http_route(service.id, method, path)
 
         if route is None and raw_event.get("status_code") is None:
@@ -1785,6 +1801,7 @@ def _validate_generated_helper_timestamps(
         dns_helper_offset = timedelta(seconds=3)
         connection_helper_offset = timedelta(seconds=2)
 
+    # These helper times mirror expansion so YAML can reject requests that would emit out-of-range helpers.
     helper_times = (
         ("generated dns_lookup helper", parsed_event.timestamp - dns_helper_offset),
         ("generated network_connection helper", parsed_event.timestamp - connection_helper_offset),
@@ -2010,6 +2027,7 @@ def _load_yaml_document(text: str) -> dict[str, Any]:
     except yaml.YAMLError as exc:
         raise ScenarioYamlError([_error(None, "<document>", text, f"YAML parser error: {exc}")]) from exc
 
+    # Multi-document files make manifest identity ambiguous, so the loader accepts exactly one document.
     if len(documents) != 1:
         raise ScenarioYamlError(
             [_error(None, "<document>", len(documents), "multi-document YAML is not supported yet")]
@@ -2056,6 +2074,7 @@ def _parse_environment(
             errors.append(_error(scenario_id, "environment", value, "unknown environment"))
             return environment_id, None
 
+        # String shorthand uses the environment's current version so fixtures can stay compact.
         return environment.id, environment.version
 
     if not isinstance(value, dict):
@@ -2161,6 +2180,7 @@ def _parse_output_families(
             errors.append(_error(scenario_id, field_path, output_family, "expected string"))
             continue
 
+        # Output family names become path components, so validate filesystem safety before support checks.
         _validate_safe_identifier(output_family, field_path, scenario_id, errors)
 
         if output_family in UNSUPPORTED_SOURCE_SPECIFIC_OUTPUT_FAMILIES:
@@ -2266,9 +2286,11 @@ def _parse_events(
             )
 
         if event_id is not None and timestamp is not None:
+            # Relative `after` timing is intentionally limited to earlier authored events.
             authored_timestamps[event_id] = timestamp
 
         if event_id is not None and event_type is not None and timestamp is not None:
+            # Keep a copy of the raw event so later type-specific builders can read optional fields.
             parsed_events.append(
                 ParsedYamlEvent(
                     event_id=event_id,
@@ -2315,6 +2337,7 @@ def _parse_event_timing(
         return None, None, None
 
     if delay_value is not None and after is None:
+        # A delay has no anchor without `after`, so keep validating but do not use it by itself.
         errors.append(_error(scenario_id, f"{field_path}.delay", delay_value, "delay may appear only with after"))
 
     if after is not None and not isinstance(after, str):
@@ -2330,12 +2353,14 @@ def _parse_event_timing(
         delay = _parse_duration(delay_value, f"{field_path}.delay", scenario_id, errors, allow_leading_plus=False)
 
     if at_value is not None:
+        # Absolute `at` wins for the timestamp while `after` can still express parentage/correlation.
         return _parse_event_at(at_value, f"{field_path}.at", scenario_id, start_time, errors), after, delay
 
     if after not in authored_timestamps:
         return None, after, delay
 
     if delay is None:
+        # `after` with no delay means the child shares the parent's timestamp.
         delay = timedelta(0)
 
     return authored_timestamps[after] + delay, after, delay

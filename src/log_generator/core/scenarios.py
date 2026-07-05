@@ -249,6 +249,7 @@ class Scenario:
         seen_sequence_orders = set()
 
         for scenario_event in self.events:
+            # Sequence order is the deterministic tie-breaker used by every writer.
             if scenario_event.sequence_order in seen_sequence_orders:
                 raise ValueError(f"duplicate sequence order '{scenario_event.sequence_order}' in scenario '{self.id}'")
 
@@ -271,6 +272,7 @@ class Scenario:
             parent_event_id = getattr(event, "parent_event_id", None)
 
             if parent_event_id is not None and parent_event_id not in earlier_event_ids:
+                # Parent links describe causal order, so they must point backward in rendered event order.
                 raise ValueError(
                     f"parent event '{parent_event_id}' for event '{event.event_id}' must resolve to an earlier event"
                 )
@@ -300,6 +302,7 @@ def expand_authored_events(
 
     for authored_event in authored_events:
         if isinstance(authored_event, AuthoredWebRequest):
+            # A web request may need prerequisite DNS and connection events before the HTTP event itself.
             _expand_web_request(
                 scenario_id=scenario_id,
                 seed=seed,
@@ -342,6 +345,7 @@ def _expand_web_request(
     status_code = authored_event.status_code
 
     if status_code is None:
+        # Known routes supply deterministic defaults; unknown routes require authors to be explicit.
         if route is None:
             raise ValueError(
                 f"web request '{authored_event.event_id}' needs status_code because route "
@@ -353,6 +357,7 @@ def _expand_web_request(
     existing_connection = _find_compatible_connection(expanded_events, authored_event, service, destination_host)
 
     if existing_connection is None:
+        # Reuse matching DNS when possible so related web requests can share a realistic dependency chain.
         dns_event = _find_compatible_dns_lookup(expanded_events, authored_event, service, destination_host)
 
         if dns_event is None:
@@ -367,6 +372,7 @@ def _expand_web_request(
             )
             expanded_events.append(ScenarioEvent(sequence_order=_next_sequence_order(expanded_events), event=dns_event))
 
+        # Every HTTP request needs a network flow; generated helpers parent to the lookup that enabled them.
         connection_event = _build_connection_helper_event(
             scenario_id=scenario_id,
             seed=seed,
@@ -383,6 +389,7 @@ def _expand_web_request(
         )
         existing_connection = connection_event
 
+    # The authored web request becomes the visible HTTP event and parents to the compatible connection.
     web_request_event = _build_expanded_web_request(
         scenario_id=scenario_id,
         authored_event=authored_event,
@@ -522,11 +529,13 @@ def _build_expanded_web_request(
     download_metadata = classify_web_request_path(authored_event.path)
 
     if download_metadata is not None:
+        # Download classification is derived from the path unless the author already supplied metadata.
         metadata.update(download_metadata)
 
     url = authored_event.url
 
     if url is None:
+        # Use the first configured service name as the canonical host for deterministic rendered output.
         url = f"http://{service.names[0]}{authored_event.path}"
 
     return WebRequestEvent(
@@ -575,6 +584,7 @@ def _find_compatible_dns_lookup(
         if not isinstance(event, DnsLookupEvent):
             continue
 
+        # A compatible lookup must be successful, same activity, same origin, and resolve the target service.
         if event.status != "success" or event.correlation_id != authored_event.correlation_id:
             continue
 
@@ -614,6 +624,7 @@ def _find_compatible_connection(
         if not isinstance(event, NetworkConnectionEvent):
             continue
 
+        # A reusable connection must describe the same source, destination, service, and transport tuple.
         if event.status != "success" or event.correlation_id != authored_event.correlation_id:
             continue
 

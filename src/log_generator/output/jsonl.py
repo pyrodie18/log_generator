@@ -55,6 +55,7 @@ def iter_ordered_events(scenarios: tuple[Scenario, ...]) -> tuple[SourceNeutralE
 
     for scenario_index, scenario in enumerate(scenarios):
         for scenario_event in scenario.events:
+            # Scenario index keeps cross-scenario ordering deterministic when timestamps and sequence tie.
             events.append(
                 (scenario_event.event.timestamp, scenario_event.sequence_order, scenario_index, scenario_event)
             )
@@ -107,6 +108,7 @@ def validate_path_component(component: str) -> None:
     if os.altsep is not None:
         separators.add(os.altsep)
 
+    # Writers compose paths from known components only; rejecting separators prevents path traversal.
     if not component:
         raise ValueError("output path components must not be empty")
 
