@@ -8,7 +8,10 @@ import pytest
 
 from log_generator.core.events import (
     DnsLookupEvent,
+    DnsContext,
+    HttpContext,
     LinuxLocalLoginEvent,
+    NetworkContext,
     NetworkConnectionEvent,
     WebRequestEvent,
 )
@@ -89,6 +92,70 @@ def test_network_connection_event_serializes_required_fields_without_placeholder
     assert "firewall_rule_name" not in serialized_event
     assert "metadata" not in serialized_event
     assert "attack" not in serialized_event
+
+
+def test_shared_detail_contexts_serialize_under_source_neutral_namespaces() -> None:
+    """
+    Verify authored shared details serialize without introducing source-specific fields.
+
+    Returns:
+        None: This test asserts serialized context namespaces directly.
+    """
+    connection_event = NetworkConnectionEvent(
+        event_id="evt-web-002",
+        scenario_id="scenario-shared-details",
+        timestamp=datetime(2026, 1, 15, 14, 0, 4, tzinfo=timezone.utc),
+        status="success",
+        correlation_id="corr-shared-details",
+        source_host_id="linux-ws-01",
+        source_ip="10.10.10.11",
+        destination_ip="10.10.20.21",
+        destination_port=80,
+        network_protocol="tcp",
+        network=NetworkContext(source_port=55000, orig_bytes=120, resp_bytes=2048),
+    )
+    dns_event = DnsLookupEvent(
+        event_id="evt-web-001",
+        scenario_id="scenario-shared-details",
+        timestamp=datetime(2026, 1, 15, 14, 0, 3, tzinfo=timezone.utc),
+        status="success",
+        correlation_id="corr-shared-details",
+        source_host_id="linux-ws-01",
+        query_name="web-server-01.internal",
+        query_type="A",
+        dns=DnsContext(trans_id=4242, rtt=0.125, ttls=[60.0], flags={"RD": False, "RA": True}),
+    )
+    web_event = WebRequestEvent(
+        event_id="evt-web-003",
+        scenario_id="scenario-shared-details",
+        timestamp=datetime(2026, 1, 15, 14, 0, 5, tzinfo=timezone.utc),
+        status="success",
+        correlation_id="corr-shared-details",
+        source_host_id="linux-ws-01",
+        service_id="svc-web-http",
+        method="GET",
+        path="/",
+        status_code=200,
+        http=HttpContext(user_agent="curl/8.5.0", version="1.0", response_body_len=512),
+    )
+
+    assert connection_event.to_dict()["network"] == {
+        "source_port": 55000,
+        "orig_bytes": 120,
+        "resp_bytes": 2048,
+    }
+    assert dns_event.to_dict()["dns"] == {
+        "trans_id": 4242,
+        "rtt": 0.125,
+        "ttls": [60.0],
+        "flags": {"RD": False, "RA": True},
+    }
+    assert web_event.to_dict()["http"] == {
+        "user_agent": "curl/8.5.0",
+        "version": "1.0",
+        "response_body_len": 512,
+    }
+    assert "uid" not in connection_event.to_dict()
 
 
 def test_web_request_event_requires_status_code_and_serializes_metadata() -> None:

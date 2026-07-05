@@ -10,7 +10,10 @@ from typing import Any, Optional, Union
 from log_generator.core.environment import Environment, Host, Service, build_linux_mini_lab
 from log_generator.core.events import (
     DnsLookupEvent,
+    DnsContext,
+    HttpContext,
     LinuxLocalLoginEvent,
+    NetworkContext,
     NetworkConnectionEvent,
     SourceNeutralEvent,
     WebRequestEvent,
@@ -103,6 +106,10 @@ class AuthoredWebRequest:
     url: Optional[str] = None
     attack: Optional[dict[str, str]] = None
     metadata: Optional[dict[str, Any]] = None
+    request_headers: Optional[dict[str, str]] = None
+    network: Optional[NetworkContext] = None
+    dns: Optional[DnsContext] = None
+    http: Optional[HttpContext] = None
     helper_event_ids: Optional[dict[str, str]] = None
     dns_helper_offset: timedelta = timedelta(seconds=2)
     connection_helper_offset: timedelta = timedelta(seconds=1)
@@ -433,6 +440,7 @@ def _build_dns_helper_event(
         query_name=service.names[0],
         query_type="A",
         resolved_addresses=[destination_ip],
+        dns=authored_event.dns,
     )
 
 
@@ -484,6 +492,7 @@ def _build_connection_helper_event(
         destination_port=service.port,
         network_protocol=service.transport_protocol,
         application_protocol=service.application_protocol,
+        network=authored_event.network,
     )
 
 
@@ -535,6 +544,8 @@ def _build_expanded_web_request(
         url=url,
         path=authored_event.path,
         status_code=status_code,
+        request_headers=authored_event.request_headers,
+        http=authored_event.http,
         attack=authored_event.attack,
         metadata=metadata or None,
     )

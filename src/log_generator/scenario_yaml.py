@@ -9,7 +9,14 @@ import re
 from typing import Any, Mapping, Optional, Union
 
 from log_generator.core.environment import Environment, build_linux_mini_lab
-from log_generator.core.events import LinuxLocalLoginEvent, VALID_STATUSES, normalize_utc_timestamp
+from log_generator.core.events import (
+    DnsContext,
+    HttpContext,
+    LinuxLocalLoginEvent,
+    NetworkContext,
+    VALID_STATUSES,
+    normalize_utc_timestamp,
+)
 from log_generator.core.scenarios import (
     AnswerKeyRecord,
     AuthoredEvent,
@@ -69,6 +76,9 @@ EVENT_TYPE_FIELDS = {
             "status_code",
             "query_string",
             "headers",
+            "network",
+            "dns",
+            "http",
         }
     ),
     "linux_local_login": frozenset(
@@ -816,6 +826,10 @@ def _build_authored_web_request(
     path = _required_event_string(parsed, parsed_event, "path", errors)
     status = _event_status(raw_event)
     status_code = _optional_event_integer(parsed, parsed_event, "status_code", errors)
+    request_headers = _optional_string_mapping(parsed, parsed_event, "headers", errors)
+    network = _optional_network_context(parsed, parsed_event, errors)
+    dns = _optional_dns_context(parsed, parsed_event, errors)
+    http = _optional_http_context(parsed, parsed_event, errors)
 
     if not all((actor_user_id, source_host_id, service_id, method, path)):
         return None
@@ -842,6 +856,10 @@ def _build_authored_web_request(
         status_code=status_code,
         attack=_optional_dict(raw_event.get("attack")),
         metadata=_optional_dict(raw_event.get("metadata")),
+        request_headers=request_headers,
+        network=network,
+        dns=dns,
+        http=http,
         helper_event_ids=_canonical_helper_event_ids(parsed_event.event_id, all_authored_event_ids),
         dns_helper_offset=dns_helper_offset,
         connection_helper_offset=connection_helper_offset,
@@ -1068,6 +1086,466 @@ def _optional_event_integer(
     return value
 
 
+def _optional_string_mapping(
+    parsed: ParsedScenarioYaml,
+    parsed_event: ParsedYamlEvent,
+    field_name: str,
+    errors: list[ScenarioYamlValidationError],
+) -> Optional[dict[str, str]]:
+    """
+    Read an optional mapping of strings from a parsed YAML event.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        parsed_event (ParsedYamlEvent): Parsed YAML event.
+        field_name (str): Optional field name.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        Optional[dict[str, str]]: String mapping when present and valid.
+    """
+    if field_name not in parsed_event.raw or parsed_event.raw[field_name] is None:
+        return None
+
+    value = parsed_event.raw[field_name]
+    field_path = _event_field_path(parsed_event, field_name)
+
+    if not isinstance(value, dict):
+        errors.append(_error(parsed.scenario_id, field_path, value, "expected mapping"))
+        return None
+
+    output = {}
+
+    for key, item in value.items():
+        if not isinstance(key, str):
+            errors.append(_error(parsed.scenario_id, f"{field_path}.{key}", key, "expected string key"))
+            continue
+
+        if not isinstance(item, str):
+            errors.append(_error(parsed.scenario_id, f"{field_path}.{key}", item, "expected string"))
+            continue
+
+        output[key] = item
+
+    return output or None
+
+
+def _optional_network_context(
+    parsed: ParsedScenarioYaml,
+    parsed_event: ParsedYamlEvent,
+    errors: list[ScenarioYamlValidationError],
+) -> Optional[NetworkContext]:
+    """
+    Read optional source-neutral network detail overrides from a YAML event.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        parsed_event (ParsedYamlEvent): Parsed YAML event.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        Optional[NetworkContext]: Parsed network context when present and valid.
+    """
+    value = parsed_event.raw.get("network")
+
+    if value is None:
+        return None
+
+    field_path = _event_field_path(parsed_event, "network")
+    error_count = len(errors)
+
+    if not isinstance(value, dict):
+        errors.append(_error(parsed.scenario_id, field_path, value, "expected mapping"))
+        return None
+
+    _validate_unknown_fields(
+        value,
+        {"source_port", "orig_bytes", "resp_bytes", "orig_pkts", "resp_pkts"},
+        field_path,
+        parsed.scenario_id,
+        errors,
+    )
+
+    source_port = _optional_context_integer(parsed, value, "source_port", field_path, errors)
+    orig_bytes = _optional_context_integer(parsed, value, "orig_bytes", field_path, errors)
+    resp_bytes = _optional_context_integer(parsed, value, "resp_bytes", field_path, errors)
+    orig_pkts = _optional_context_integer(parsed, value, "orig_pkts", field_path, errors)
+    resp_pkts = _optional_context_integer(parsed, value, "resp_pkts", field_path, errors)
+
+    _validate_context_port(parsed, "source_port", source_port, field_path, errors)
+    _validate_context_non_negative(parsed, "orig_bytes", orig_bytes, field_path, errors)
+    _validate_context_non_negative(parsed, "resp_bytes", resp_bytes, field_path, errors)
+    _validate_context_non_negative(parsed, "orig_pkts", orig_pkts, field_path, errors)
+    _validate_context_non_negative(parsed, "resp_pkts", resp_pkts, field_path, errors)
+
+    if len(errors) > error_count:
+        return None
+
+    return NetworkContext(
+        source_port=source_port,
+        orig_bytes=orig_bytes,
+        resp_bytes=resp_bytes,
+        orig_pkts=orig_pkts,
+        resp_pkts=resp_pkts,
+    )
+
+
+def _optional_dns_context(
+    parsed: ParsedScenarioYaml,
+    parsed_event: ParsedYamlEvent,
+    errors: list[ScenarioYamlValidationError],
+) -> Optional[DnsContext]:
+    """
+    Read optional source-neutral DNS detail overrides from a YAML event.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        parsed_event (ParsedYamlEvent): Parsed YAML event.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        Optional[DnsContext]: Parsed DNS context when present and valid.
+    """
+    value = parsed_event.raw.get("dns")
+
+    if value is None:
+        return None
+
+    field_path = _event_field_path(parsed_event, "dns")
+    error_count = len(errors)
+
+    if not isinstance(value, dict):
+        errors.append(_error(parsed.scenario_id, field_path, value, "expected mapping"))
+        return None
+
+    _validate_unknown_fields(value, {"trans_id", "rtt", "ttls", "flags"}, field_path, parsed.scenario_id, errors)
+    trans_id = _optional_context_integer(parsed, value, "trans_id", field_path, errors)
+    rtt = _optional_context_number(parsed, value, "rtt", field_path, errors)
+    ttls = _optional_context_number_list(parsed, value, "ttls", field_path, errors)
+    flags = _optional_dns_flags(parsed, value, field_path, errors)
+
+    _validate_context_port(parsed, "trans_id", trans_id, field_path, errors)
+    _validate_context_non_negative_number(parsed, "rtt", rtt, field_path, errors)
+
+    if ttls is not None:
+        for index, ttl in enumerate(ttls):
+            _validate_context_non_negative_number(parsed, f"ttls[{index}]", ttl, field_path, errors)
+
+    if len(errors) > error_count:
+        return None
+
+    return DnsContext(trans_id=trans_id, rtt=rtt, ttls=ttls, flags=flags)
+
+
+def _optional_http_context(
+    parsed: ParsedScenarioYaml,
+    parsed_event: ParsedYamlEvent,
+    errors: list[ScenarioYamlValidationError],
+) -> Optional[HttpContext]:
+    """
+    Read optional source-neutral HTTP detail overrides from a YAML event.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        parsed_event (ParsedYamlEvent): Parsed YAML event.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        Optional[HttpContext]: Parsed HTTP context when present and valid.
+    """
+    value = parsed_event.raw.get("http")
+
+    if value is None:
+        return None
+
+    field_path = _event_field_path(parsed_event, "http")
+    error_count = len(errors)
+
+    if not isinstance(value, dict):
+        errors.append(_error(parsed.scenario_id, field_path, value, "expected mapping"))
+        return None
+
+    _validate_unknown_fields(
+        value,
+        {"user_agent", "version", "response_body_len", "response_content_type"},
+        field_path,
+        parsed.scenario_id,
+        errors,
+    )
+    user_agent = _optional_context_string(parsed, value, "user_agent", field_path, errors)
+    version = _optional_context_string(parsed, value, "version", field_path, errors)
+    response_body_len = _optional_context_integer(parsed, value, "response_body_len", field_path, errors)
+    response_content_type = _optional_context_string(parsed, value, "response_content_type", field_path, errors)
+
+    _validate_context_non_negative(parsed, "response_body_len", response_body_len, field_path, errors)
+
+    if len(errors) > error_count:
+        return None
+
+    return HttpContext(
+        user_agent=user_agent,
+        version=version,
+        response_body_len=response_body_len,
+        response_content_type=response_content_type,
+    )
+
+
+def _optional_context_integer(
+    parsed: ParsedScenarioYaml,
+    values: dict[str, Any],
+    field_name: str,
+    prefix: str,
+    errors: list[ScenarioYamlValidationError],
+) -> Optional[int]:
+    """
+    Read an optional integer from a nested context mapping.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        values (dict[str, Any]): Context mapping to read.
+        field_name (str): Optional field name.
+        prefix (str): Field path prefix.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        Optional[int]: Integer value when present and valid.
+    """
+    if field_name not in values or values[field_name] is None:
+        return None
+
+    value = values[field_name]
+
+    if not isinstance(value, int) or isinstance(value, bool):
+        errors.append(_error(parsed.scenario_id, f"{prefix}.{field_name}", value, "expected integer"))
+        return None
+
+    return value
+
+
+def _optional_context_number(
+    parsed: ParsedScenarioYaml,
+    values: dict[str, Any],
+    field_name: str,
+    prefix: str,
+    errors: list[ScenarioYamlValidationError],
+) -> Optional[float]:
+    """
+    Read an optional number from a nested context mapping.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        values (dict[str, Any]): Context mapping to read.
+        field_name (str): Optional field name.
+        prefix (str): Field path prefix.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        Optional[float]: Numeric value when present and valid.
+    """
+    if field_name not in values or values[field_name] is None:
+        return None
+
+    value = values[field_name]
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        errors.append(_error(parsed.scenario_id, f"{prefix}.{field_name}", value, "expected number"))
+        return None
+
+    return float(value)
+
+
+def _optional_context_number_list(
+    parsed: ParsedScenarioYaml,
+    values: dict[str, Any],
+    field_name: str,
+    prefix: str,
+    errors: list[ScenarioYamlValidationError],
+) -> Optional[list[float]]:
+    """
+    Read an optional list of numbers from a nested context mapping.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        values (dict[str, Any]): Context mapping to read.
+        field_name (str): Optional field name.
+        prefix (str): Field path prefix.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        Optional[list[float]]: Numeric list when present and valid.
+    """
+    if field_name not in values or values[field_name] is None:
+        return None
+
+    value = values[field_name]
+
+    if not isinstance(value, list):
+        errors.append(_error(parsed.scenario_id, f"{prefix}.{field_name}", value, "expected list of numbers"))
+        return None
+
+    output = []
+
+    for index, item in enumerate(value):
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            errors.append(_error(parsed.scenario_id, f"{prefix}.{field_name}[{index}]", item, "expected number"))
+            continue
+
+        output.append(float(item))
+
+    return output
+
+
+def _optional_context_string(
+    parsed: ParsedScenarioYaml,
+    values: dict[str, Any],
+    field_name: str,
+    prefix: str,
+    errors: list[ScenarioYamlValidationError],
+) -> Optional[str]:
+    """
+    Read an optional string from a nested context mapping.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        values (dict[str, Any]): Context mapping to read.
+        field_name (str): Optional field name.
+        prefix (str): Field path prefix.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        Optional[str]: String value when present and valid.
+    """
+    if field_name not in values or values[field_name] is None:
+        return None
+
+    value = values[field_name]
+
+    if not isinstance(value, str):
+        errors.append(_error(parsed.scenario_id, f"{prefix}.{field_name}", value, "expected string"))
+        return None
+
+    return value
+
+
+def _optional_dns_flags(
+    parsed: ParsedScenarioYaml,
+    values: dict[str, Any],
+    prefix: str,
+    errors: list[ScenarioYamlValidationError],
+) -> Optional[dict[str, bool]]:
+    """
+    Read optional DNS response flags from a nested context mapping.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        values (dict[str, Any]): Context mapping to read.
+        prefix (str): Field path prefix.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        Optional[dict[str, bool]]: DNS flag overrides when present and valid.
+    """
+    if "flags" not in values or values["flags"] is None:
+        return None
+
+    flags = values["flags"]
+    field_path = f"{prefix}.flags"
+
+    if not isinstance(flags, dict):
+        errors.append(_error(parsed.scenario_id, field_path, flags, "expected mapping"))
+        return None
+
+    _validate_unknown_fields(flags, {"AA", "TC", "RD", "RA"}, field_path, parsed.scenario_id, errors)
+    output = {}
+
+    for name, value in flags.items():
+        if name not in {"AA", "TC", "RD", "RA"}:
+            continue
+
+        if not isinstance(value, bool):
+            errors.append(_error(parsed.scenario_id, f"{field_path}.{name}", value, "expected boolean"))
+            continue
+
+        output[name] = value
+
+    return output or None
+
+
+def _validate_context_port(
+    parsed: ParsedScenarioYaml,
+    field_name: str,
+    value: Optional[int],
+    prefix: str,
+    errors: list[ScenarioYamlValidationError],
+) -> None:
+    """
+    Validate that an optional context integer fits the port/count16 range.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        field_name (str): Context field name.
+        value (Optional[int]): Optional value to validate.
+        prefix (str): Field path prefix.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        None: The errors list is updated in place.
+    """
+    if value is None:
+        return
+
+    if value < 0 or value > 65535:
+        errors.append(_error(parsed.scenario_id, f"{prefix}.{field_name}", value, "must be between 0 and 65535"))
+
+
+def _validate_context_non_negative(
+    parsed: ParsedScenarioYaml,
+    field_name: str,
+    value: Optional[int],
+    prefix: str,
+    errors: list[ScenarioYamlValidationError],
+) -> None:
+    """
+    Validate that an optional context integer is non-negative.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        field_name (str): Context field name.
+        value (Optional[int]): Optional value to validate.
+        prefix (str): Field path prefix.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        None: The errors list is updated in place.
+    """
+    if value is not None and value < 0:
+        errors.append(_error(parsed.scenario_id, f"{prefix}.{field_name}", value, "must be non-negative"))
+
+
+def _validate_context_non_negative_number(
+    parsed: ParsedScenarioYaml,
+    field_name: str,
+    value: Optional[float],
+    prefix: str,
+    errors: list[ScenarioYamlValidationError],
+) -> None:
+    """
+    Validate that an optional context number is non-negative.
+
+    Args:
+        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
+        field_name (str): Context field name.
+        value (Optional[float]): Optional value to validate.
+        prefix (str): Field path prefix.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        None: The errors list is updated in place.
+    """
+    if value is not None and value < 0:
+        errors.append(_error(parsed.scenario_id, f"{prefix}.{field_name}", value, "must be non-negative"))
+
+
 def _optional_dict(value: Any) -> Optional[dict[str, Any]]:
     """
     Return a shallow dictionary copy for optional mapping values.
@@ -1198,6 +1676,11 @@ def _validate_yaml_web_request(
 
     if raw_event.get("status_code") is not None:
         _validate_status_code(parsed.scenario_id, parsed_event, raw_event["status_code"], errors)
+
+    _optional_network_context(parsed, parsed_event, errors)
+    _optional_dns_context(parsed, parsed_event, errors)
+    _optional_http_context(parsed, parsed_event, errors)
+    _optional_string_mapping(parsed, parsed_event, "headers", errors)
 
     if service is not None and service.application_protocol == "http" and method is not None and path is not None:
         route = environment.get_http_route(service.id, method, path)

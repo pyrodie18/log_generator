@@ -45,6 +45,14 @@ def _add_optional_field(output: dict[str, Any], field_name: str, value: Any) -> 
     if isinstance(value, dict) and not value:
         return
 
+    if hasattr(value, "to_dict"):
+        serialized_value = value.to_dict()
+
+        if serialized_value:
+            output[field_name] = serialized_value
+
+        return
+
     # Copy mutable containers to keep callers from accidentally mutating serialized output later.
     if isinstance(value, dict):
         output[field_name] = dict(value)
@@ -55,6 +63,208 @@ def _add_optional_field(output: dict[str, Any], field_name: str, value: Any) -> 
         return
 
     output[field_name] = value
+
+
+def _validate_optional_non_negative_integer(field_name: str, value: Optional[int]) -> None:
+    """
+    Validate that an optional integer is non-negative.
+
+    Args:
+        field_name (str): Name to include in validation errors.
+        value (Optional[int]): Optional integer value to validate.
+
+    Returns:
+        None: Raises ValueError when the value is invalid.
+    """
+    if value is None:
+        return
+
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{field_name} must be a non-negative integer")
+
+
+def _validate_optional_port(field_name: str, value: Optional[int]) -> None:
+    """
+    Validate that an optional value is a TCP or UDP port.
+
+    Args:
+        field_name (str): Name to include in validation errors.
+        value (Optional[int]): Optional port value to validate.
+
+    Returns:
+        None: Raises ValueError when the value is invalid.
+    """
+    if value is None:
+        return
+
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > 65535:
+        raise ValueError(f"{field_name} must be between 0 and 65535")
+
+
+def _validate_optional_non_negative_number(field_name: str, value: Optional[float]) -> None:
+    """
+    Validate that an optional numeric value is non-negative.
+
+    Args:
+        field_name (str): Name to include in validation errors.
+        value (Optional[float]): Optional numeric value to validate.
+
+    Returns:
+        None: Raises ValueError when the value is invalid.
+    """
+    if value is None:
+        return
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ValueError(f"{field_name} must be a non-negative number")
+
+
+@dataclass(frozen=True)
+class NetworkContext:
+    """
+    Carry source-neutral flow details shared by network-oriented output families.
+    """
+
+    source_port: Optional[int] = None
+    orig_bytes: Optional[int] = None
+    resp_bytes: Optional[int] = None
+    orig_pkts: Optional[int] = None
+    resp_pkts: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        """
+        Validate authored flow details.
+
+        Returns:
+            None: Raises ValueError when a field cannot represent a plausible flow value.
+        """
+        _validate_optional_port("network.source_port", self.source_port)
+        _validate_optional_non_negative_integer("network.orig_bytes", self.orig_bytes)
+        _validate_optional_non_negative_integer("network.resp_bytes", self.resp_bytes)
+        _validate_optional_non_negative_integer("network.orig_pkts", self.orig_pkts)
+        _validate_optional_non_negative_integer("network.resp_pkts", self.resp_pkts)
+
+    def to_dict(self) -> dict[str, int]:
+        """
+        Serialize populated flow details.
+
+        Returns:
+            dict[str, int]: Populated source-neutral flow detail fields.
+        """
+        output = {}
+
+        for field_name in ("source_port", "orig_bytes", "resp_bytes", "orig_pkts", "resp_pkts"):
+            value = getattr(self, field_name)
+
+            if value is not None:
+                output[field_name] = value
+
+        return output
+
+
+@dataclass(frozen=True)
+class DnsContext:
+    """
+    Carry source-neutral DNS transaction details shared by DNS-capable outputs.
+    """
+
+    trans_id: Optional[int] = None
+    rtt: Optional[float] = None
+    ttls: Optional[list[float]] = None
+    flags: Optional[dict[str, bool]] = None
+
+    def __post_init__(self) -> None:
+        """
+        Validate authored DNS details.
+
+        Returns:
+            None: Raises ValueError when a field cannot represent plausible DNS context.
+        """
+        _validate_optional_non_negative_integer("dns.trans_id", self.trans_id)
+
+        if self.trans_id is not None and self.trans_id > 65535:
+            raise ValueError("dns.trans_id must be between 0 and 65535")
+
+        _validate_optional_non_negative_number("dns.rtt", self.rtt)
+
+        if self.ttls is not None:
+            for index, ttl in enumerate(self.ttls):
+                _validate_optional_non_negative_number(f"dns.ttls[{index}]", ttl)
+
+        if self.flags is not None:
+            for name, value in self.flags.items():
+                if name not in {"AA", "TC", "RD", "RA"}:
+                    raise ValueError("dns.flags supports only AA, TC, RD, and RA")
+
+                if not isinstance(value, bool):
+                    raise ValueError(f"dns.flags.{name} must be a boolean")
+
+    def to_dict(self) -> dict[str, Any]:
+        """
+        Serialize populated DNS details.
+
+        Returns:
+            dict[str, Any]: Populated source-neutral DNS detail fields.
+        """
+        output: dict[str, Any] = {}
+
+        if self.trans_id is not None:
+            output["trans_id"] = self.trans_id
+
+        if self.rtt is not None:
+            output["rtt"] = self.rtt
+
+        if self.ttls is not None:
+            output["ttls"] = list(self.ttls)
+
+        if self.flags is not None:
+            output["flags"] = dict(self.flags)
+
+        return output
+
+
+@dataclass(frozen=True)
+class HttpContext:
+    """
+    Carry source-neutral HTTP transaction details shared by HTTP-capable outputs.
+    """
+
+    user_agent: Optional[str] = None
+    version: Optional[str] = None
+    response_body_len: Optional[int] = None
+    response_content_type: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        """
+        Validate authored HTTP details.
+
+        Returns:
+            None: Raises ValueError when a field cannot represent plausible HTTP context.
+        """
+        _validate_optional_non_negative_integer("http.response_body_len", self.response_body_len)
+
+        for field_name in ("user_agent", "version", "response_content_type"):
+            value = getattr(self, field_name)
+
+            if value is not None and not isinstance(value, str):
+                raise ValueError(f"http.{field_name} must be a string")
+
+    def to_dict(self) -> dict[str, Any]:
+        """
+        Serialize populated HTTP details.
+
+        Returns:
+            dict[str, Any]: Populated source-neutral HTTP detail fields.
+        """
+        output: dict[str, Any] = {}
+
+        for field_name in ("user_agent", "version", "response_body_len", "response_content_type"):
+            value = getattr(self, field_name)
+
+            if value is not None:
+                output[field_name] = value
+
+        return output
 
 
 @dataclass(frozen=True)
@@ -141,6 +351,8 @@ class DnsLookupEvent(SourceNeutralEvent):
     service_id: Optional[str] = None
     resolved_addresses: Optional[list[str]] = None
     rcode: Optional[str] = None
+    network: Optional[NetworkContext] = None
+    dns: Optional[DnsContext] = None
     metadata: Optional[dict[str, Any]] = None
     attack: Optional[dict[str, Any]] = None
 
@@ -158,6 +370,8 @@ class DnsLookupEvent(SourceNeutralEvent):
             "query_type": self.query_type,
             "resolved_addresses": self.resolved_addresses,
             "rcode": self.rcode,
+            "network": self.network,
+            "dns": self.dns,
         }
 
 
@@ -177,6 +391,7 @@ class NetworkConnectionEvent(SourceNeutralEvent):
     destination_host_id: Optional[str] = None
     service_id: Optional[str] = None
     application_protocol: Optional[str] = None
+    network: Optional[NetworkContext] = None
     metadata: Optional[dict[str, Any]] = None
     attack: Optional[dict[str, Any]] = None
 
@@ -195,6 +410,7 @@ class NetworkConnectionEvent(SourceNeutralEvent):
             "destination_port": self.destination_port,
             "network_protocol": self.network_protocol,
             "application_protocol": self.application_protocol,
+            "network": self.network,
         }
 
 
@@ -216,6 +432,7 @@ class WebRequestEvent(SourceNeutralEvent):
     query_string: Optional[str] = None
     request_headers: Optional[dict[str, str]] = None
     response_content_type: Optional[str] = None
+    http: Optional[HttpContext] = None
     metadata: Optional[dict[str, Any]] = None
     attack: Optional[dict[str, Any]] = None
 
@@ -236,6 +453,7 @@ class WebRequestEvent(SourceNeutralEvent):
             "query_string": self.query_string,
             "request_headers": self.request_headers,
             "response_content_type": self.response_content_type,
+            "http": self.http,
         }
 
 

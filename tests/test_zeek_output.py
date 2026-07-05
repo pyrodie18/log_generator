@@ -12,6 +12,7 @@ from log_generator.core.scenarios import (
     build_benign_internal_web_scenario,
     build_local_account_misuse_web_scenario,
 )
+from log_generator.scenario_yaml import build_scenario_from_yaml_text
 from log_generator.output.zeek import (
     ZEEK_EMPTY_FIELD,
     ZEEK_UNSET_FIELD,
@@ -444,6 +445,87 @@ def test_zeek_writer_generates_visible_benign_dns_and_http_streams(tmp_path: Pat
     assert http_records[0]["status_code"] == "200"
     assert http_records[0]["uid"] == conn_records[1]["uid"]
     assert http_records[0]["id.orig_p"] == conn_records[1]["id.orig_p"]
+
+
+def test_zeek_writer_prefers_authored_shared_detail_overrides(tmp_path: Path) -> None:
+    """
+    Verify authored source-neutral flow, DNS, and HTTP details override generated Zeek defaults.
+
+    Args:
+        tmp_path (Path): Pytest temporary output directory.
+
+    Returns:
+        None: This test asserts generated Zeek records consume authored shared details.
+    """
+    scenario = build_scenario_from_yaml_text(
+        """
+schema_version: scenario/v0.1
+id: scenario-authored-shared-details
+name: Authored Shared Details
+seed: 4444
+environment:
+  id: linux-mini-lab
+  version: "0.1"
+time_range:
+  start: 2026-01-15T14:00:00Z
+  end: 2026-01-15T14:00:10Z
+output_families:
+  - zeek
+events:
+  - id: evt-shared-web-003
+    type: web_request
+    at: +3s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /admin/archive.tar.gz
+    network:
+      source_port: 55000
+      orig_bytes: 1234
+      resp_bytes: 5678
+      orig_pkts: 3
+      resp_pkts: 4
+    dns:
+      trans_id: 4242
+      rtt: 0.125
+      ttls:
+        - 60
+      flags:
+        AA: true
+        RD: false
+        RA: true
+    http:
+      user_agent: ExactAgent/1.0
+      version: "1.0"
+      response_body_len: 9876
+      response_content_type: text/plain
+"""
+    )
+    generated_at = datetime(2026, 1, 15, 14, 0, 3, tzinfo=timezone.utc)
+
+    write_zeek_logs(tmp_path, (scenario,), generated_at=generated_at)
+    conn_records = read_zeek_records(tmp_path / "logs" / "zeek-sensor-01" / "zeek" / "conn.log")
+    dns_records = read_zeek_records(tmp_path / "logs" / "zeek-sensor-01" / "zeek" / "dns.log")
+    http_records = read_zeek_records(tmp_path / "logs" / "zeek-sensor-01" / "zeek" / "http.log")
+    http_conn_record = conn_records[1]
+
+    assert dns_records[0]["trans_id"] == "4242"
+    assert dns_records[0]["rtt"] == "0.125000"
+    assert dns_records[0]["AA"] == "T"
+    assert dns_records[0]["RD"] == "F"
+    assert dns_records[0]["TTLs"] == "60.000000"
+    assert http_conn_record["id.orig_p"] == "55000"
+    assert http_conn_record["orig_bytes"] == "1234"
+    assert http_conn_record["resp_bytes"] == "5678"
+    assert http_conn_record["orig_pkts"] == "3"
+    assert http_conn_record["resp_pkts"] == "4"
+    assert http_records[0]["uid"] == http_conn_record["uid"]
+    assert http_records[0]["id.orig_p"] == "55000"
+    assert http_records[0]["version"] == "1.0"
+    assert http_records[0]["user_agent"] == "ExactAgent/1.0"
+    assert http_records[0]["response_body_len"] == "9876"
+    assert http_records[0]["resp_mime_types"] == "text/plain"
 
 
 def test_zeek_writer_reuses_http_connection_for_misuse_sequence(tmp_path: Path) -> None:

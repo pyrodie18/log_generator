@@ -66,6 +66,10 @@ class ZeekFlowContext:
     source_host_id: str
     destination_host_id: str
     timestamp: datetime
+    orig_bytes: Optional[int] = None
+    resp_bytes: Optional[int] = None
+    orig_pkts: Optional[int] = None
+    resp_pkts: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -479,11 +483,12 @@ def _build_dns_flow_context(scenario: Scenario, environment: Environment, event:
     source_host = environment.require_host(event.source_host_id)
     service = _service_for_event(environment, event, default_service_id="svc-dns")
     destination_host = environment.require_host(service.target_host_id)
+    network = event.network
 
     return ZeekFlowContext(
         uid=_stable_zeek_uid(scenario, f"dns:{event.event_id}"),
         source_ip=source_host.primary_ip,
-        source_port=_stable_client_port(scenario, f"dns:{event.event_id}"),
+        source_port=_context_source_port(network, scenario, f"dns:{event.event_id}"),
         destination_ip=destination_host.primary_ip,
         destination_port=service.port,
         network_protocol=service.transport_protocol,
@@ -491,6 +496,10 @@ def _build_dns_flow_context(scenario: Scenario, environment: Environment, event:
         source_host_id=source_host.id,
         destination_host_id=destination_host.id,
         timestamp=event.timestamp,
+        orig_bytes=_context_count(network, "orig_bytes"),
+        resp_bytes=_context_count(network, "resp_bytes"),
+        orig_pkts=_context_count(network, "orig_pkts"),
+        resp_pkts=_context_count(network, "resp_pkts"),
     )
 
 
@@ -505,10 +514,12 @@ def _build_connection_flow_context(scenario: Scenario, event: NetworkConnectionE
     Returns:
         ZeekFlowContext: Shared connection flow context.
     """
+    network = event.network
+
     return ZeekFlowContext(
         uid=_stable_zeek_uid(scenario, f"conn:{event.event_id}"),
         source_ip=event.source_ip,
-        source_port=_stable_client_port(scenario, f"conn:{event.event_id}"),
+        source_port=_context_source_port(network, scenario, f"conn:{event.event_id}"),
         destination_ip=event.destination_ip,
         destination_port=event.destination_port,
         network_protocol=event.network_protocol,
@@ -516,6 +527,10 @@ def _build_connection_flow_context(scenario: Scenario, event: NetworkConnectionE
         source_host_id=event.source_host_id,
         destination_host_id=event.destination_host_id or "",
         timestamp=event.timestamp,
+        orig_bytes=_context_count(network, "orig_bytes"),
+        resp_bytes=_context_count(network, "resp_bytes"),
+        orig_pkts=_context_count(network, "orig_pkts"),
+        resp_pkts=_context_count(network, "resp_pkts"),
     )
 
 
@@ -538,11 +553,11 @@ def _dns_conn_record(event: DnsLookupEvent, flow_context: ZeekFlowContext) -> di
         timestamp=event.timestamp,
         duration=0.025,
         service="dns",
-        orig_bytes=78,
-        resp_bytes=response_size,
+        orig_bytes=_authored_or_default(flow_context.orig_bytes, 78),
+        resp_bytes=_authored_or_default(flow_context.resp_bytes, response_size),
         history="Dd",
-        orig_pkts=1,
-        resp_pkts=1,
+        orig_pkts=_authored_or_default(flow_context.orig_pkts, 1),
+        resp_pkts=_authored_or_default(flow_context.resp_pkts, 1),
         ip_header_bytes=28,
     )
 
@@ -579,11 +594,11 @@ def _connection_record(
         timestamp=event.timestamp,
         duration=duration,
         service=flow_context.application_protocol,
-        orig_bytes=orig_bytes,
-        resp_bytes=resp_bytes,
+        orig_bytes=_authored_or_default(flow_context.orig_bytes, orig_bytes),
+        resp_bytes=_authored_or_default(flow_context.resp_bytes, resp_bytes),
         history="ShADadFf",
-        orig_pkts=max(1, ceil(orig_bytes / 1200)),
-        resp_pkts=max(1, ceil(resp_bytes / 1200)),
+        orig_pkts=_authored_or_default(flow_context.orig_pkts, max(1, ceil(orig_bytes / 1200))),
+        resp_pkts=_authored_or_default(flow_context.resp_pkts, max(1, ceil(resp_bytes / 1200))),
         ip_header_bytes=40,
     )
 
@@ -661,6 +676,12 @@ def _dns_record(event: DnsLookupEvent, flow_context: ZeekFlowContext) -> dict[st
     """
     rcode_name = (event.rcode or "NOERROR").upper()
     answers = event.resolved_addresses or []
+    dns = event.dns
+    flags = dns.flags if dns is not None and dns.flags is not None else {}
+    trans_id = _authored_or_default(
+        getattr(dns, "trans_id", None),
+        _stable_count(event.scenario_id, event.event_id, modulo=65536),
+    )
 
     return {
         "_scenario_id": event.scenario_id,
@@ -672,8 +693,8 @@ def _dns_record(event: DnsLookupEvent, flow_context: ZeekFlowContext) -> dict[st
         "id.resp_h": flow_context.destination_ip,
         "id.resp_p": flow_context.destination_port,
         "proto": flow_context.network_protocol,
-        "trans_id": _stable_count(event.scenario_id, event.event_id, modulo=65536),
-        "rtt": 0.025,
+        "trans_id": trans_id,
+        "rtt": _authored_or_default(getattr(dns, "rtt", None), 0.025),
         "query": event.query_name,
         "qclass": 1,
         "qclass_name": "C_INTERNET",
@@ -681,13 +702,13 @@ def _dns_record(event: DnsLookupEvent, flow_context: ZeekFlowContext) -> dict[st
         "qtype_name": event.query_type.upper(),
         "rcode": _dns_rcode_number(rcode_name),
         "rcode_name": rcode_name,
-        "AA": False,
-        "TC": False,
-        "RD": True,
-        "RA": True,
+        "AA": flags.get("AA", False),
+        "TC": flags.get("TC", False),
+        "RD": flags.get("RD", True),
+        "RA": flags.get("RA", True),
         "Z": 0,
         "answers": answers,
-        "TTLs": [300.0 for _ in answers],
+        "TTLs": _dns_ttls(event, answers),
         "rejected": event.status != "success" or rcode_name not in {"NOERROR", "NXDOMAIN"},
     }
 
@@ -714,6 +735,7 @@ def _http_record(
     response_file_name = _response_file_name(event)
     response_mime_type = _response_mime_type(event, response_file_name)
     response_file_id = None
+    http = event.http
 
     if response_file_name is not None:
         response_file_id = "F" + sha1(f"{event.scenario_id}:{event.event_id}:file".encode("utf-8")).hexdigest()[:10]
@@ -732,8 +754,11 @@ def _http_record(
         "host": service.names[0],
         "uri": _http_uri(event),
         "referrer": _header_value(event, "referer"),
-        "version": "1.1",
-        "user_agent": _header_value(event, "user-agent") or "Mozilla/5.0 log-generator/0.1",
+        "version": _authored_or_default(getattr(http, "version", None), "1.1"),
+        "user_agent": _authored_or_default(
+            getattr(http, "user_agent", None),
+            _header_value(event, "user-agent") or "Mozilla/5.0 log-generator/0.1",
+        ),
         "request_body_len": 0,
         "response_body_len": _http_response_size(event),
         "status_code": event.status_code,
@@ -903,6 +928,60 @@ def _stable_client_port(scenario: Scenario, key: str) -> int:
     return 49152 + _stable_count(scenario.id, f"{scenario.seed}:{key}", modulo=16384)
 
 
+def _context_source_port(network: Any, scenario: Scenario, key: str) -> int:
+    """
+    Return an authored source port or the deterministic flow default.
+
+    Args:
+        network (Any): Optional source-neutral network context.
+        scenario (Scenario): Scenario owning the flow.
+        key (str): Flow-specific key.
+
+    Returns:
+        int: Source port for the flow.
+    """
+    source_port = _context_count(network, "source_port")
+
+    if source_port is not None:
+        return source_port
+
+    return _stable_client_port(scenario, key)
+
+
+def _context_count(context: Any, field_name: str) -> Optional[int]:
+    """
+    Return an optional integer field from a source-neutral context object.
+
+    Args:
+        context (Any): Optional context object.
+        field_name (str): Field name to read.
+
+    Returns:
+        Optional[int]: Context value when present.
+    """
+    if context is None:
+        return None
+
+    return getattr(context, field_name, None)
+
+
+def _authored_or_default(authored_value: Any, default_value: Any) -> Any:
+    """
+    Return an authored override when present, otherwise a deterministic default.
+
+    Args:
+        authored_value (Any): Optional authored value.
+        default_value (Any): Default value to use when the authored value is omitted.
+
+    Returns:
+        Any: Authored value or default value.
+    """
+    if authored_value is not None:
+        return authored_value
+
+    return default_value
+
+
 def _stable_count(scenario_id: str, key: str, modulo: int) -> int:
     """
     Derive a stable non-negative integer below a modulo.
@@ -985,6 +1064,23 @@ def _dns_rcode_number(rcode_name: str) -> int:
     return rcodes.get(rcode_name.upper(), 0)
 
 
+def _dns_ttls(event: DnsLookupEvent, answers: list[str]) -> list[float]:
+    """
+    Return authored DNS TTLs or deterministic defaults for each answer.
+
+    Args:
+        event (DnsLookupEvent): DNS event to inspect.
+        answers (list[str]): DNS answers emitted for the event.
+
+    Returns:
+        list[float]: TTL values for Zeek dns.log.
+    """
+    if event.dns is not None and event.dns.ttls is not None:
+        return list(event.dns.ttls)
+
+    return [300.0 for _ in answers]
+
+
 def _http_uri(event: WebRequestEvent) -> str:
     """
     Build the HTTP URI value from path and optional query string.
@@ -1052,6 +1148,9 @@ def _http_response_size(event: WebRequestEvent) -> int:
     Returns:
         int: Estimated response body bytes.
     """
+    if event.http is not None and event.http.response_body_len is not None:
+        return event.http.response_body_len
+
     metadata = event.metadata or {}
 
     if "response_body_len" in metadata:
@@ -1099,6 +1198,9 @@ def _response_mime_type(event: WebRequestEvent, file_name: Optional[str]) -> Opt
     Returns:
         Optional[str]: MIME type when file metadata should be emitted.
     """
+    if event.http is not None and event.http.response_content_type:
+        return event.http.response_content_type
+
     if event.response_content_type:
         return event.response_content_type
 

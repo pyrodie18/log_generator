@@ -1334,6 +1334,32 @@ def test_invalid_status_code_range_is_rejected() -> None:
     )
 
 
+def test_invalid_shared_detail_override_is_rejected_with_field_path() -> None:
+    """
+    Verify authored shared-detail overrides fail with nested YAML field paths.
+
+    Returns:
+        None: This test asserts validation error text directly.
+    """
+    assert_yaml_error_contains(
+        minimal_yaml(
+            """
+  - id: evt-web-003
+    type: web_request
+    at: +3s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /
+    network:
+      source_port: 70000
+"""
+        ),
+        "events[0].network.source_port: 70000 is invalid because must be between 0 and 65535",
+    )
+
+
 def test_invalid_attack_technique_id_is_rejected() -> None:
     """
     Verify ATT&CK technique IDs use the supported simple T-number form.
