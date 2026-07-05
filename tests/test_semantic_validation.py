@@ -205,6 +205,60 @@ def test_bad_route_is_rejected() -> None:
     assert "must exist on service" in error.reason
 
 
+def test_web_status_code_can_override_route_default() -> None:
+    """
+    Verify explicit web response status codes can differ from route defaults.
+
+    Returns:
+        None: This test asserts authored source-neutral override behavior directly.
+    """
+    event = WebRequestEvent(
+        event_id="evt-status-override",
+        scenario_id="scenario-valid",
+        timestamp=parse_utc_datetime("2026-01-15T14:00:00Z"),
+        status="success",
+        correlation_id="corr-valid",
+        actor_user_id="user-alice",
+        source_host_id="linux-ws-01",
+        destination_host_id="web-server-01",
+        service_id="svc-web-http",
+        method="GET",
+        path="/",
+        status_code=503,
+    )
+
+    assert validate_events("scenario-valid", (event,), build_linux_mini_lab()) == []
+
+
+def test_web_status_code_range_is_validated_semantically() -> None:
+    """
+    Verify direct source-neutral web request events reject invalid HTTP status codes.
+
+    Returns:
+        None: This test asserts semantic status-code validation directly.
+    """
+    event = WebRequestEvent(
+        event_id="evt-invalid-status",
+        scenario_id="scenario-invalid",
+        timestamp=parse_utc_datetime("2026-01-15T14:00:00Z"),
+        status="success",
+        correlation_id="corr-invalid",
+        actor_user_id="user-alice",
+        source_host_id="linux-ws-01",
+        destination_host_id="web-server-01",
+        service_id="svc-web-http",
+        method="GET",
+        path="/",
+        status_code=99,
+    )
+
+    error = validate_events("scenario-invalid", (event,), build_linux_mini_lab())[0]
+
+    assert error.field_path == "events.evt-invalid-status.status_code"
+    assert error.invalid_value == 99
+    assert "between 100 and 599" in error.reason
+
+
 def test_unresolved_parent_event_is_rejected() -> None:
     """
     Verify parent references must point to earlier events in the same validation sequence.

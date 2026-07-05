@@ -381,13 +381,13 @@ def _validate_web_request(
                     f"route '{event.method} {event.path}' must exist on service '{service.id}'",
                 )
             )
-        elif event.status_code != route.default_status:
+        elif event.status_code < 100 or event.status_code > 599:
             errors.append(
                 _error(
                     scenario_id,
                     _field_path(event, "status_code"),
                     event.status_code,
-                    f"status_code must match route default '{route.default_status}' unless an override is modeled",
+                    "status_code must be between 100 and 599",
                 )
             )
 
