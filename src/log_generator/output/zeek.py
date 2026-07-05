@@ -349,7 +349,9 @@ def build_zeek_records(
             scenario_event.event.event_id: scenario_event.event for scenario_event in ordered_scenario_events
         }
         flow_contexts = _build_flow_contexts(scenario, environment, ordered_scenario_events)
+        web_requests_by_flow_key = _web_requests_by_http_flow_key(ordered_scenario_events, events_by_id)
         http_depths: dict[str, int] = {}
+        emitted_conn_uids: set[str] = set()
 
         for scenario_event in ordered_scenario_events:
             event = scenario_event.event
@@ -360,8 +362,21 @@ def build_zeek_records(
                 if flow_context is None or not _flow_is_visible(environment, flow_context):
                     continue
 
-                _append_record(records_by_stream, event_types_by_stream, "conn", _dns_conn_record(event, flow_context))
-                _append_record(records_by_stream, event_types_by_stream, "dns", _dns_record(event, flow_context))
+                if flow_context.uid not in emitted_conn_uids:
+                    _append_record(
+                        records_by_stream,
+                        event_types_by_stream,
+                        "conn",
+                        _dns_conn_record(event, flow_context, scenario_event.sequence_order),
+                    )
+                    emitted_conn_uids.add(flow_context.uid)
+
+                _append_record(
+                    records_by_stream,
+                    event_types_by_stream,
+                    "dns",
+                    _dns_record(event, flow_context, scenario_event.sequence_order),
+                )
                 continue
 
             if isinstance(event, NetworkConnectionEvent):
@@ -370,20 +385,41 @@ def build_zeek_records(
                 if flow_context is None or not _flow_is_visible(environment, flow_context):
                     continue
 
+                if flow_context.uid in emitted_conn_uids:
+                    continue
+
                 web_requests = _web_requests_for_connection(events_by_id.values(), event.event_id)
                 _append_record(
                     records_by_stream,
                     event_types_by_stream,
                     "conn",
-                    _connection_record(event, flow_context, web_requests),
+                    _connection_record(event, flow_context, web_requests, scenario_event.sequence_order),
                 )
+                emitted_conn_uids.add(flow_context.uid)
                 continue
 
             if isinstance(event, WebRequestEvent):
-                flow_context = flow_contexts.get(_http_flow_key(event))
+                flow_key = _http_flow_key(event, events_by_id)
+                flow_context = flow_contexts.get(flow_key)
 
                 if flow_context is None or not _flow_is_visible(environment, flow_context):
                     continue
+
+                needs_sibling_conn = not _web_request_uses_connection_event(event, events_by_id)
+
+                if needs_sibling_conn and flow_context.uid not in emitted_conn_uids:
+                    _append_record(
+                        records_by_stream,
+                        event_types_by_stream,
+                        "conn",
+                        _http_sibling_conn_record(
+                            event,
+                            flow_context,
+                            web_requests_by_flow_key.get(flow_key, (event,)),
+                            scenario_event.sequence_order,
+                        ),
+                    )
+                    emitted_conn_uids.add(flow_context.uid)
 
                 depth_key = flow_context.uid
                 http_depths[depth_key] = http_depths.get(depth_key, 0) + 1
@@ -391,7 +427,13 @@ def build_zeek_records(
                     records_by_stream,
                     event_types_by_stream,
                     "http",
-                    _http_record(event, flow_context, environment, http_depths[depth_key]),
+                    _http_record(
+                        event,
+                        flow_context,
+                        environment,
+                        http_depths[depth_key],
+                        scenario_event.sequence_order,
+                    ),
                 )
 
     for stream_name, records in records_by_stream.items():
@@ -464,7 +506,15 @@ def _build_flow_contexts(
             continue
 
         if event.parent_event_id in connection_contexts_by_event_id:
-            contexts[_http_flow_key(event)] = connection_contexts_by_event_id[event.parent_event_id]
+            contexts[_http_connection_flow_key(event.parent_event_id)] = connection_contexts_by_event_id[
+                event.parent_event_id
+            ]
+            continue
+
+        context = _build_http_flow_context(scenario, environment, event)
+
+        if context is not None:
+            contexts[_http_standalone_flow_key(event)] = context
 
     return contexts
 
@@ -535,13 +585,59 @@ def _build_connection_flow_context(scenario: Scenario, event: NetworkConnectionE
     )
 
 
-def _dns_conn_record(event: DnsLookupEvent, flow_context: ZeekFlowContext) -> dict[str, Any]:
+def _build_http_flow_context(
+    scenario: Scenario,
+    environment: Environment,
+    event: WebRequestEvent,
+) -> Optional[ZeekFlowContext]:
+    """
+    Build shared flow context for a standalone HTTP event without a connection parent.
+
+    Args:
+        scenario (Scenario): Scenario owning the event.
+        environment (Environment): Environment used to resolve service and host facts.
+        event (WebRequestEvent): HTTP event to describe.
+
+    Returns:
+        Optional[ZeekFlowContext]: Shared HTTP flow context, or None when references cannot resolve.
+    """
+    source_host = environment.get_host(event.source_host_id)
+    service = environment.get_service(event.service_id)
+
+    if source_host is None or service is None:
+        return None
+
+    destination_host = environment.get_host(event.destination_host_id or service.target_host_id)
+
+    if destination_host is None:
+        return None
+
+    return ZeekFlowContext(
+        uid=_stable_zeek_uid(scenario, f"http:{event.event_id}"),
+        source_ip=source_host.primary_ip,
+        source_port=_stable_client_port(scenario, f"http:{event.event_id}"),
+        destination_ip=destination_host.primary_ip,
+        destination_port=service.port,
+        network_protocol=service.transport_protocol,
+        application_protocol=service.application_protocol,
+        source_host_id=source_host.id,
+        destination_host_id=destination_host.id,
+        timestamp=event.timestamp,
+    )
+
+
+def _dns_conn_record(
+    event: DnsLookupEvent,
+    flow_context: ZeekFlowContext,
+    sequence_order: int,
+) -> dict[str, Any]:
     """
     Build a Zeek conn.log record for a DNS lookup.
 
     Args:
         event (DnsLookupEvent): Source DNS event.
         flow_context (ZeekFlowContext): Shared flow context.
+        sequence_order (int): Deterministic source event sequence order.
 
     Returns:
         dict[str, Any]: Zeek conn.log record.
@@ -560,6 +656,7 @@ def _dns_conn_record(event: DnsLookupEvent, flow_context: ZeekFlowContext) -> di
         orig_pkts=_authored_or_default(flow_context.orig_pkts, 1),
         resp_pkts=_authored_or_default(flow_context.resp_pkts, 1),
         ip_header_bytes=28,
+        sequence_order=sequence_order,
     )
 
 
@@ -567,6 +664,7 @@ def _connection_record(
     event: NetworkConnectionEvent,
     flow_context: ZeekFlowContext,
     web_requests: tuple[WebRequestEvent, ...],
+    sequence_order: int,
 ) -> dict[str, Any]:
     """
     Build a Zeek conn.log record for a source-neutral connection event.
@@ -575,13 +673,70 @@ def _connection_record(
         event (NetworkConnectionEvent): Source connection event.
         flow_context (ZeekFlowContext): Shared flow context.
         web_requests (tuple[WebRequestEvent, ...]): HTTP requests that reuse the connection.
+        sequence_order (int): Deterministic source event sequence order.
+
+    Returns:
+        dict[str, Any]: Zeek conn.log record.
+    """
+    return _web_flow_conn_record(
+        event=event,
+        flow_context=flow_context,
+        web_requests=web_requests,
+        timestamp=event.timestamp,
+        sequence_order=sequence_order,
+    )
+
+
+def _http_sibling_conn_record(
+    event: WebRequestEvent,
+    flow_context: ZeekFlowContext,
+    web_requests: tuple[WebRequestEvent, ...],
+    sequence_order: int,
+) -> dict[str, Any]:
+    """
+    Build a Zeek conn.log sibling record for HTTP events without a connection event.
+
+    Args:
+        event (WebRequestEvent): Source HTTP event that needs a sibling connection record.
+        flow_context (ZeekFlowContext): Shared flow context.
+        web_requests (tuple[WebRequestEvent, ...]): HTTP requests sharing the synthesized connection.
+        sequence_order (int): Deterministic source event sequence order.
+
+    Returns:
+        dict[str, Any]: Zeek conn.log record.
+    """
+    return _web_flow_conn_record(
+        event=event,
+        flow_context=flow_context,
+        web_requests=web_requests,
+        timestamp=flow_context.timestamp,
+        sequence_order=sequence_order,
+    )
+
+
+def _web_flow_conn_record(
+    event: SourceNeutralEvent,
+    flow_context: ZeekFlowContext,
+    web_requests: tuple[WebRequestEvent, ...],
+    timestamp: datetime,
+    sequence_order: int,
+) -> dict[str, Any]:
+    """
+    Build a Zeek conn.log record for a TCP flow carrying zero or more HTTP requests.
+
+    Args:
+        event (SourceNeutralEvent): Source event responsible for the connection row.
+        flow_context (ZeekFlowContext): Shared flow context.
+        web_requests (tuple[WebRequestEvent, ...]): HTTP requests that reuse the connection.
+        timestamp (datetime): Connection start timestamp.
+        sequence_order (int): Deterministic source event sequence order.
 
     Returns:
         dict[str, Any]: Zeek conn.log record.
     """
     if web_requests:
         last_request_time = max(web_request.timestamp for web_request in web_requests)
-        duration = max((last_request_time - event.timestamp).total_seconds() + 0.05, 0.001)
+        duration = max((last_request_time - timestamp).total_seconds() + 0.05, 0.001)
         orig_bytes = sum(_http_request_size(web_request) for web_request in web_requests)
         resp_bytes = sum(_http_response_size(web_request) for web_request in web_requests)
     else:
@@ -592,7 +747,7 @@ def _connection_record(
     return _conn_record(
         event=event,
         flow_context=flow_context,
-        timestamp=event.timestamp,
+        timestamp=timestamp,
         duration=duration,
         service=flow_context.application_protocol,
         orig_bytes=_authored_or_default(flow_context.orig_bytes, orig_bytes),
@@ -601,6 +756,7 @@ def _connection_record(
         orig_pkts=_authored_or_default(flow_context.orig_pkts, max(1, ceil(orig_bytes / 1200))),
         resp_pkts=_authored_or_default(flow_context.resp_pkts, max(1, ceil(resp_bytes / 1200))),
         ip_header_bytes=40,
+        sequence_order=sequence_order,
     )
 
 
@@ -616,6 +772,7 @@ def _conn_record(
     orig_pkts: int,
     resp_pkts: int,
     ip_header_bytes: int,
+    sequence_order: int,
 ) -> dict[str, Any]:
     """
     Build a Zeek conn.log record from normalized flow facts.
@@ -632,6 +789,7 @@ def _conn_record(
         orig_pkts (int): Originator packet count.
         resp_pkts (int): Responder packet count.
         ip_header_bytes (int): Per-packet network and transport header estimate.
+        sequence_order (int): Deterministic source event sequence order.
 
     Returns:
         dict[str, Any]: Zeek conn.log record.
@@ -639,6 +797,7 @@ def _conn_record(
     return {
         "_scenario_id": event.scenario_id,
         "_event_type": event.event_type,
+        "_sequence_order": sequence_order,
         "ts": timestamp,
         "uid": flow_context.uid,
         "id.orig_h": flow_context.source_ip,
@@ -664,13 +823,18 @@ def _conn_record(
     }
 
 
-def _dns_record(event: DnsLookupEvent, flow_context: ZeekFlowContext) -> dict[str, Any]:
+def _dns_record(
+    event: DnsLookupEvent,
+    flow_context: ZeekFlowContext,
+    sequence_order: int,
+) -> dict[str, Any]:
     """
     Build a Zeek dns.log record from a source-neutral DNS lookup.
 
     Args:
         event (DnsLookupEvent): Source DNS event.
         flow_context (ZeekFlowContext): Shared flow context.
+        sequence_order (int): Deterministic source event sequence order.
 
     Returns:
         dict[str, Any]: Zeek dns.log record.
@@ -687,6 +851,7 @@ def _dns_record(event: DnsLookupEvent, flow_context: ZeekFlowContext) -> dict[st
     return {
         "_scenario_id": event.scenario_id,
         "_event_type": event.event_type,
+        "_sequence_order": sequence_order,
         "ts": event.timestamp,
         "uid": flow_context.uid,
         "id.orig_h": flow_context.source_ip,
@@ -719,6 +884,7 @@ def _http_record(
     flow_context: ZeekFlowContext,
     environment: Environment,
     trans_depth: int,
+    sequence_order: int,
 ) -> dict[str, Any]:
     """
     Build a Zeek http.log record from a source-neutral web request.
@@ -728,6 +894,7 @@ def _http_record(
         flow_context (ZeekFlowContext): Shared flow context.
         environment (Environment): Environment used to resolve service names.
         trans_depth (int): HTTP transaction depth for the connection.
+        sequence_order (int): Deterministic source event sequence order.
 
     Returns:
         dict[str, Any]: Zeek http.log record.
@@ -744,6 +911,7 @@ def _http_record(
     return {
         "_scenario_id": event.scenario_id,
         "_event_type": event.event_type,
+        "_sequence_order": sequence_order,
         "ts": event.timestamp,
         "uid": flow_context.uid,
         "id.orig_h": flow_context.source_ip,
@@ -862,6 +1030,54 @@ def _web_requests_for_connection(
     return tuple(sorted(web_requests, key=lambda web_request: web_request.timestamp))
 
 
+def _web_requests_by_http_flow_key(
+    ordered_scenario_events: tuple[ScenarioEvent, ...],
+    events_by_id: Mapping[str, SourceNeutralEvent],
+) -> dict[str, tuple[WebRequestEvent, ...]]:
+    """
+    Group HTTP requests by the Zeek flow that will carry them.
+
+    Args:
+        ordered_scenario_events (tuple[ScenarioEvent, ...]): Scenario events in deterministic order.
+        events_by_id (Mapping[str, SourceNeutralEvent]): Events keyed by source-neutral event ID.
+
+    Returns:
+        dict[str, tuple[WebRequestEvent, ...]]: HTTP requests grouped by deterministic flow key.
+    """
+    grouped_requests: dict[str, list[WebRequestEvent]] = {}
+
+    for scenario_event in ordered_scenario_events:
+        event = scenario_event.event
+
+        if not isinstance(event, WebRequestEvent):
+            continue
+
+        flow_key = _http_flow_key(event, events_by_id)
+        grouped_requests.setdefault(flow_key, []).append(event)
+
+    return {flow_key: tuple(web_requests) for flow_key, web_requests in grouped_requests.items()}
+
+
+def _web_request_uses_connection_event(
+    event: WebRequestEvent,
+    events_by_id: Mapping[str, SourceNeutralEvent],
+) -> bool:
+    """
+    Return whether an HTTP event is backed by an explicit source-neutral connection event.
+
+    Args:
+        event (WebRequestEvent): HTTP event to inspect.
+        events_by_id (Mapping[str, SourceNeutralEvent]): Events keyed by source-neutral event ID.
+
+    Returns:
+        bool: True when the HTTP event's parent is a network connection event.
+    """
+    if event.parent_event_id is None:
+        return False
+
+    return isinstance(events_by_id.get(event.parent_event_id), NetworkConnectionEvent)
+
+
 def _dns_flow_key(event: DnsLookupEvent) -> str:
     """
     Return the deterministic flow key for a DNS event.
@@ -888,9 +1104,42 @@ def _connection_flow_key(event: NetworkConnectionEvent) -> str:
     return f"conn:{event.event_id}"
 
 
-def _http_flow_key(event: WebRequestEvent) -> str:
+def _http_flow_key(
+    event: WebRequestEvent,
+    events_by_id: Mapping[str, SourceNeutralEvent],
+) -> str:
     """
     Return the deterministic flow key for an HTTP event.
+
+    Args:
+        event (WebRequestEvent): HTTP event to key.
+        events_by_id (Mapping[str, SourceNeutralEvent]): Events keyed by source-neutral event ID.
+
+    Returns:
+        str: Flow key.
+    """
+    if _web_request_uses_connection_event(event, events_by_id):
+        return _http_connection_flow_key(str(event.parent_event_id))
+
+    return _http_standalone_flow_key(event)
+
+
+def _http_connection_flow_key(connection_event_id: str) -> str:
+    """
+    Return the HTTP flow key for requests backed by a connection event.
+
+    Args:
+        connection_event_id (str): Source-neutral connection event ID.
+
+    Returns:
+        str: Flow key.
+    """
+    return f"http:connection:{connection_event_id}"
+
+
+def _http_standalone_flow_key(event: WebRequestEvent) -> str:
+    """
+    Return the HTTP flow key for a request that needs a synthesized connection.
 
     Args:
         event (WebRequestEvent): HTTP event to key.
@@ -898,7 +1147,25 @@ def _http_flow_key(event: WebRequestEvent) -> str:
     Returns:
         str: Flow key.
     """
-    return f"http:{event.parent_event_id}"
+    return f"http:standalone:{event.event_id}"
+
+
+def _record_sequence_order(record: Mapping[str, Any]) -> int:
+    """
+    Return the deterministic sequence order carried by a generated Zeek record.
+
+    Args:
+        record (Mapping[str, Any]): Zeek record to inspect.
+
+    Returns:
+        int: Source-neutral scenario sequence order, or zero for legacy caller-built records.
+    """
+    sequence_order = record.get("_sequence_order", 0)
+
+    if is_integer(sequence_order):
+        return int(sequence_order)
+
+    return 0
 
 
 def _stable_zeek_uid(scenario: Scenario, key: str) -> str:
@@ -1262,7 +1529,7 @@ def _scenario_ids_for_records(records: list[dict[str, Any]]) -> tuple[str, ...]:
     return tuple(scenario_ids)
 
 
-def _zeek_record_sort_key(record: Mapping[str, Any]) -> tuple[Any, str]:
+def _zeek_record_sort_key(record: Mapping[str, Any]) -> tuple[Any, int, str]:
     """
     Return deterministic ordering for Zeek records.
 
@@ -1270,9 +1537,9 @@ def _zeek_record_sort_key(record: Mapping[str, Any]) -> tuple[Any, str]:
         record (Mapping[str, Any]): Zeek record to sort.
 
     Returns:
-        tuple[Any, str]: Timestamp followed by UID.
+        tuple[Any, int, str]: Timestamp followed by sequence order and UID fallback.
     """
-    return record["ts"], str(record["uid"])
+    return record["ts"], _record_sequence_order(record), str(record["uid"])
 
 
 def render_zeek_header(stream_name: str, opened_at: datetime) -> str:

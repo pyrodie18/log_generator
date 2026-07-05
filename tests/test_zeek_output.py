@@ -9,9 +9,12 @@ from pathlib import Path
 import pytest
 
 from log_generator.core.scenarios import (
+    Scenario,
+    ScenarioEvent,
     build_benign_internal_web_scenario,
     build_local_account_misuse_web_scenario,
 )
+from log_generator.core.events import DnsLookupEvent, LinuxLocalLoginEvent, NetworkConnectionEvent, WebRequestEvent
 from log_generator.scenario_yaml import build_scenario_from_yaml_text
 from log_generator.output.zeek import (
     ZEEK_EMPTY_FIELD,
@@ -447,6 +450,29 @@ def test_zeek_writer_generates_visible_benign_dns_and_http_streams(tmp_path: Pat
     assert http_records[0]["id.orig_p"] == conn_records[1]["id.orig_p"]
 
 
+def test_zeek_writer_skips_scenarios_that_do_not_request_zeek(tmp_path: Path) -> None:
+    """
+    Verify the public Zeek writer does not create source-specific paths unless Zeek is requested.
+
+    Args:
+        tmp_path (Path): Pytest temporary output directory.
+
+    Returns:
+        None: This test asserts the writer's requested-family gate directly.
+    """
+    scenario = build_benign_internal_web_scenario()
+
+    result = write_zeek_logs(
+        tmp_path,
+        (scenario,),
+        generated_at=datetime(2026, 1, 15, 14, 0, 3, tzinfo=timezone.utc),
+    )
+
+    assert result.files == ()
+    assert result.omitted_streams == ()
+    assert not (tmp_path / "logs" / "zeek-sensor-01").exists()
+
+
 def test_zeek_writer_prefers_authored_shared_detail_overrides(tmp_path: Path) -> None:
     """
     Verify authored source-neutral flow, DNS, and HTTP details override generated Zeek defaults.
@@ -551,6 +577,181 @@ def test_zeek_writer_reuses_http_connection_for_misuse_sequence(tmp_path: Path) 
     assert {record["uid"] for record in http_records} == {http_connection_uid}
     assert http_records[1]["resp_filenames"] == "archive.tar.gz"
     assert http_records[1]["resp_mime_types"] == "application/gzip"
+
+
+def test_zeek_writer_builds_sibling_connection_for_standalone_http_event(tmp_path: Path) -> None:
+    """
+    Verify a source-neutral HTTP event without a connection parent still produces a sibling conn.log row.
+
+    Args:
+        tmp_path (Path): Pytest temporary output directory.
+
+    Returns:
+        None: This test asserts generated Zeek HTTP and connection relationships.
+    """
+    timestamp = datetime(2026, 1, 15, 14, 0, 2, tzinfo=timezone.utc)
+    scenario = Scenario(
+        id="scenario-standalone-http",
+        name="Standalone HTTP",
+        seed=9090,
+        environment_id="linux-mini-lab",
+        environment_version="0.1",
+        start_time=timestamp,
+        output_families=("zeek",),
+        events=(
+            ScenarioEvent(
+                sequence_order=1,
+                event=WebRequestEvent(
+                    event_id="evt-standalone-http-001",
+                    scenario_id="scenario-standalone-http",
+                    timestamp=timestamp,
+                    status="success",
+                    correlation_id="corr-standalone-http",
+                    source_host_id="linux-ws-01",
+                    destination_host_id="web-server-01",
+                    service_id="svc-web-http",
+                    method="GET",
+                    path="/about",
+                    status_code=200,
+                ),
+            ),
+        ),
+    )
+
+    result = write_zeek_logs(tmp_path, (scenario,), generated_at=timestamp)
+    conn_records = read_zeek_records(tmp_path / "logs" / "zeek-sensor-01" / "zeek" / "conn.log")
+    http_records = read_zeek_records(tmp_path / "logs" / "zeek-sensor-01" / "zeek" / "http.log")
+
+    assert [zeek_file.stream_name for zeek_file in result.files] == ["conn", "http"]
+    assert [stream.log_stream for stream in result.omitted_streams] == ["dns.log"]
+    assert len(conn_records) == 1
+    assert len(http_records) == 1
+    assert conn_records[0]["proto"] == "tcp"
+    assert conn_records[0]["service"] == "http"
+    assert http_records[0]["uid"] == conn_records[0]["uid"]
+    assert http_records[0]["id.orig_p"] == conn_records[0]["id.orig_p"]
+
+
+def test_zeek_writer_filters_invisible_flows_and_host_only_events(tmp_path: Path) -> None:
+    """
+    Verify the Zeek mapper skips flows outside sensor visibility and local-only login events.
+
+    Args:
+        tmp_path (Path): Pytest temporary output directory.
+
+    Returns:
+        None: This test asserts no Zeek files are written for invisible or host-only events.
+    """
+    start_time = datetime(2026, 1, 15, 14, 0, 0, tzinfo=timezone.utc)
+    scenario = Scenario(
+        id="scenario-invisible-zeek",
+        name="Invisible Zeek Inputs",
+        seed=9191,
+        environment_id="linux-mini-lab",
+        environment_version="0.1",
+        start_time=start_time,
+        output_families=("zeek",),
+        events=(
+            ScenarioEvent(
+                sequence_order=1,
+                event=LinuxLocalLoginEvent(
+                    event_id="evt-local-login-001",
+                    scenario_id="scenario-invisible-zeek",
+                    timestamp=start_time,
+                    status="success",
+                    correlation_id="corr-invisible",
+                    actor_user_id="user-alice",
+                    target_host_id="linux-ws-01",
+                    login_method="local_console",
+                ),
+            ),
+            ScenarioEvent(
+                sequence_order=2,
+                event=NetworkConnectionEvent(
+                    event_id="evt-invisible-conn-002",
+                    scenario_id="scenario-invisible-zeek",
+                    timestamp=datetime(2026, 1, 15, 14, 0, 1, tzinfo=timezone.utc),
+                    status="success",
+                    correlation_id="corr-invisible",
+                    source_host_id="zeek-sensor-01",
+                    source_ip="10.10.30.31",
+                    destination_host_id="web-server-01",
+                    destination_ip="10.10.20.21",
+                    service_id="svc-web-http",
+                    destination_port=80,
+                    network_protocol="tcp",
+                    application_protocol="http",
+                ),
+            ),
+        ),
+    )
+
+    result = write_zeek_logs(tmp_path, (scenario,), generated_at=start_time)
+
+    assert result.files == ()
+    assert [stream.log_stream for stream in result.omitted_streams] == ["conn.log", "dns.log", "http.log"]
+    assert not (tmp_path / "logs" / "zeek-sensor-01").exists()
+
+
+def test_zeek_records_with_matching_timestamps_follow_sequence_order(tmp_path: Path) -> None:
+    """
+    Verify same-timestamp records are ordered by source-neutral sequence order before UID fallback.
+
+    Args:
+        tmp_path (Path): Pytest temporary output directory.
+
+    Returns:
+        None: This test asserts deterministic Zeek row ordering.
+    """
+    timestamp = datetime(2026, 1, 15, 14, 0, 0, tzinfo=timezone.utc)
+    scenario = Scenario(
+        id="scenario-zeek-ordering",
+        name="Zeek Ordering",
+        seed=101,
+        environment_id="linux-mini-lab",
+        environment_version="0.1",
+        start_time=timestamp,
+        output_families=("zeek",),
+        events=(
+            ScenarioEvent(
+                sequence_order=1,
+                event=DnsLookupEvent(
+                    event_id="evt-a",
+                    scenario_id="scenario-zeek-ordering",
+                    timestamp=timestamp,
+                    status="success",
+                    correlation_id="corr-ordering",
+                    source_host_id="linux-ws-01",
+                    destination_host_id="lab-dns-01",
+                    service_id="svc-dns",
+                    query_name="first.internal",
+                    query_type="A",
+                    resolved_addresses=["10.10.20.21"],
+                ),
+            ),
+            ScenarioEvent(
+                sequence_order=2,
+                event=DnsLookupEvent(
+                    event_id="evt-b",
+                    scenario_id="scenario-zeek-ordering",
+                    timestamp=timestamp,
+                    status="success",
+                    correlation_id="corr-ordering",
+                    source_host_id="linux-ws-01",
+                    destination_host_id="lab-dns-01",
+                    service_id="svc-dns",
+                    query_name="second.internal",
+                    query_type="A",
+                    resolved_addresses=["10.10.20.21"],
+                ),
+            ),
+        ),
+    )
+
+    write_zeek_logs(tmp_path, (scenario,), generated_at=timestamp)
+    dns_records = read_zeek_records(tmp_path / "logs" / "zeek-sensor-01" / "zeek" / "dns.log")
+
+    assert [record["query"] for record in dns_records] == ["first.internal", "second.internal"]
 
 
 def test_zeek_writer_omits_empty_streams_without_creating_files(tmp_path: Path) -> None:

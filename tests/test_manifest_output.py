@@ -61,6 +61,7 @@ def test_benign_manifest_omits_ground_truth_and_matches_written_files(tmp_path: 
     assert manifest_path == tmp_path / "manifest.json"
     assert events_path.exists()
     assert scenario_manifest_path.exists()
+    assert not (tmp_path / "logs" / "zeek-sensor-01").exists()
     assert not (tmp_path / "metadata" / "ground-truth.jsonl").exists()
     assert manifest["schema_version"] == "output-manifest/v0.1"
     assert manifest["generated_at"] == "2026-01-15T14:00:03+00:00"
