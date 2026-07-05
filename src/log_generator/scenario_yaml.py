@@ -25,6 +25,15 @@ from log_generator.core.scenarios import (
     ScenarioEvent,
     expand_authored_events,
 )
+from log_generator.core.value_checks import (
+    is_http_status_code,
+    is_integer,
+    is_ip_address,
+    is_non_negative_integer,
+    is_non_negative_number,
+    is_number,
+    is_port_number,
+)
 from log_generator.output.jsonl import SOURCE_SPECIFIC_OUTPUT_FAMILIES, validate_path_component
 from log_generator.output.manifest import write_output_manifest
 
@@ -892,8 +901,22 @@ def _build_linux_local_login_event(
     login_method = _required_event_string(parsed, parsed_event, "login_method", errors)
     source_host_id = _optional_event_string(parsed, parsed_event, "source_host", errors)
     source_ip = _optional_event_string(parsed, parsed_event, "source_ip", errors)
+    source_ip_is_valid = source_ip is None or is_ip_address(source_ip)
+
+    if not source_ip_is_valid:
+        errors.append(
+            _error(
+                parsed.scenario_id,
+                _event_field_path(parsed_event, "source_ip"),
+                source_ip,
+                "must be a valid IP address",
+            )
+        )
 
     if not all((actor_user_id, target_host_id, login_method)):
+        return None
+
+    if not source_ip_is_valid:
         return None
 
     return LinuxLocalLoginEvent(
@@ -1077,7 +1100,7 @@ def _optional_event_integer(
 
     value = parsed_event.raw[field_name]
 
-    if not isinstance(value, int) or isinstance(value, bool):
+    if not is_integer(value):
         errors.append(
             _error(parsed.scenario_id, _event_field_path(parsed_event, field_name), value, "expected integer")
         )
@@ -1315,7 +1338,7 @@ def _optional_context_integer(
 
     value = values[field_name]
 
-    if not isinstance(value, int) or isinstance(value, bool):
+    if not is_integer(value):
         errors.append(_error(parsed.scenario_id, f"{prefix}.{field_name}", value, "expected integer"))
         return None
 
@@ -1347,7 +1370,7 @@ def _optional_context_number(
 
     value = values[field_name]
 
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if not is_number(value):
         errors.append(_error(parsed.scenario_id, f"{prefix}.{field_name}", value, "expected number"))
         return None
 
@@ -1386,7 +1409,7 @@ def _optional_context_number_list(
     output = []
 
     for index, item in enumerate(value):
-        if isinstance(item, bool) or not isinstance(item, (int, float)):
+        if not is_number(item):
             errors.append(_error(parsed.scenario_id, f"{prefix}.{field_name}[{index}]", item, "expected number"))
             continue
 
@@ -1491,10 +1514,7 @@ def _validate_context_port(
     Returns:
         None: The errors list is updated in place.
     """
-    if value is None:
-        return
-
-    if value < 0 or value > 65535:
+    if not is_port_number(value, allow_none=True):
         errors.append(_error(parsed.scenario_id, f"{prefix}.{field_name}", value, "must be between 0 and 65535"))
 
 
@@ -1518,7 +1538,7 @@ def _validate_context_non_negative(
     Returns:
         None: The errors list is updated in place.
     """
-    if value is not None and value < 0:
+    if not is_non_negative_integer(value, allow_none=True):
         errors.append(_error(parsed.scenario_id, f"{prefix}.{field_name}", value, "must be non-negative"))
 
 
@@ -1542,7 +1562,7 @@ def _validate_context_non_negative_number(
     Returns:
         None: The errors list is updated in place.
     """
-    if value is not None and value < 0:
+    if not is_non_negative_number(value, allow_none=True):
         errors.append(_error(parsed.scenario_id, f"{prefix}.{field_name}", value, "must be non-negative"))
 
 
@@ -1868,10 +1888,10 @@ def _validate_status_code(
     Returns:
         None: The errors list is updated in place.
     """
-    if not isinstance(value, int) or isinstance(value, bool):
+    if not is_integer(value):
         return
 
-    if value < 100 or value > 599:
+    if not is_http_status_code(value):
         errors.append(
             _error(
                 scenario_id,
@@ -2227,6 +2247,8 @@ def _parse_events(
 
             if event_type not in SUPPORTED_EVENT_TYPES:
                 errors.append(_error(scenario_id, f"{field_path}.type", event_type, "unsupported event type"))
+            elif event_type == "linux_local_login":
+                _validate_optional_ip_address_field(event_document, "source_ip", field_path, scenario_id, errors)
 
         _validate_common_event_fields(event_document, field_path, scenario_id, errors)
         timestamp, after, delay = _parse_event_timing(
@@ -2525,6 +2547,35 @@ def _validate_event_type_fields(
     _validate_unknown_fields(event_document, allowed_fields, field_path, scenario_id, errors)
 
 
+def _validate_optional_ip_address_field(
+    event_document: dict[str, Any],
+    field_name: str,
+    field_path: str,
+    scenario_id: Optional[str],
+    errors: list[ScenarioYamlValidationError],
+) -> None:
+    """
+    Validate an optional IP address field in an authored event mapping.
+
+    Args:
+        event_document (dict[str, Any]): Raw event mapping.
+        field_name (str): Optional IP address field name.
+        field_path (str): Event field path prefix.
+        scenario_id (Optional[str]): Scenario ID for validation errors.
+        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+
+    Returns:
+        None: The errors list is updated in place.
+    """
+    if field_name not in event_document or event_document[field_name] is None:
+        return
+
+    value = event_document[field_name]
+
+    if not is_ip_address(value):
+        errors.append(_error(scenario_id, f"{field_path}.{field_name}", value, "must be a valid IP address"))
+
+
 def _validate_common_event_fields(
     event_document: dict[str, Any],
     field_path: str,
@@ -2682,7 +2733,7 @@ def _required_integer(
         errors.append(_error(scenario_id, field_name, None, "field is required"))
         return None
 
-    if not isinstance(value, int) or isinstance(value, bool):
+    if not is_integer(value):
         errors.append(_error(scenario_id, field_name, value, "expected integer"))
         return None
 

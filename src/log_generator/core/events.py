@@ -6,6 +6,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, ClassVar, Optional
 
+from log_generator.core.value_checks import (
+    require_ip_address,
+    require_non_negative_integer,
+    require_non_negative_number,
+    require_port_number,
+)
+
 
 VALID_STATUSES = frozenset({"success", "failure", "denied", "unknown"})
 
@@ -65,60 +72,6 @@ def _add_optional_field(output: dict[str, Any], field_name: str, value: Any) -> 
     output[field_name] = value
 
 
-def _validate_optional_non_negative_integer(field_name: str, value: Optional[int]) -> None:
-    """
-    Validate that an optional integer is non-negative.
-
-    Args:
-        field_name (str): Name to include in validation errors.
-        value (Optional[int]): Optional integer value to validate.
-
-    Returns:
-        None: Raises ValueError when the value is invalid.
-    """
-    if value is None:
-        return
-
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise ValueError(f"{field_name} must be a non-negative integer")
-
-
-def _validate_optional_port(field_name: str, value: Optional[int]) -> None:
-    """
-    Validate that an optional value is a TCP or UDP port.
-
-    Args:
-        field_name (str): Name to include in validation errors.
-        value (Optional[int]): Optional port value to validate.
-
-    Returns:
-        None: Raises ValueError when the value is invalid.
-    """
-    if value is None:
-        return
-
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > 65535:
-        raise ValueError(f"{field_name} must be between 0 and 65535")
-
-
-def _validate_optional_non_negative_number(field_name: str, value: Optional[float]) -> None:
-    """
-    Validate that an optional numeric value is non-negative.
-
-    Args:
-        field_name (str): Name to include in validation errors.
-        value (Optional[float]): Optional numeric value to validate.
-
-    Returns:
-        None: Raises ValueError when the value is invalid.
-    """
-    if value is None:
-        return
-
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
-        raise ValueError(f"{field_name} must be a non-negative number")
-
-
 @dataclass(frozen=True)
 class NetworkContext:
     """
@@ -138,11 +91,11 @@ class NetworkContext:
         Returns:
             None: Raises ValueError when a field cannot represent a plausible flow value.
         """
-        _validate_optional_port("network.source_port", self.source_port)
-        _validate_optional_non_negative_integer("network.orig_bytes", self.orig_bytes)
-        _validate_optional_non_negative_integer("network.resp_bytes", self.resp_bytes)
-        _validate_optional_non_negative_integer("network.orig_pkts", self.orig_pkts)
-        _validate_optional_non_negative_integer("network.resp_pkts", self.resp_pkts)
+        require_port_number("network.source_port", self.source_port, allow_none=True)
+        require_non_negative_integer("network.orig_bytes", self.orig_bytes, allow_none=True)
+        require_non_negative_integer("network.resp_bytes", self.resp_bytes, allow_none=True)
+        require_non_negative_integer("network.orig_pkts", self.orig_pkts, allow_none=True)
+        require_non_negative_integer("network.resp_pkts", self.resp_pkts, allow_none=True)
 
     def to_dict(self) -> dict[str, int]:
         """
@@ -180,16 +133,12 @@ class DnsContext:
         Returns:
             None: Raises ValueError when a field cannot represent plausible DNS context.
         """
-        _validate_optional_non_negative_integer("dns.trans_id", self.trans_id)
-
-        if self.trans_id is not None and self.trans_id > 65535:
-            raise ValueError("dns.trans_id must be between 0 and 65535")
-
-        _validate_optional_non_negative_number("dns.rtt", self.rtt)
+        require_port_number("dns.trans_id", self.trans_id, allow_none=True)
+        require_non_negative_number("dns.rtt", self.rtt, allow_none=True)
 
         if self.ttls is not None:
             for index, ttl in enumerate(self.ttls):
-                _validate_optional_non_negative_number(f"dns.ttls[{index}]", ttl)
+                require_non_negative_number(f"dns.ttls[{index}]", ttl, allow_none=True)
 
         if self.flags is not None:
             for name, value in self.flags.items():
@@ -241,7 +190,7 @@ class HttpContext:
         Returns:
             None: Raises ValueError when a field cannot represent plausible HTTP context.
         """
-        _validate_optional_non_negative_integer("http.response_body_len", self.response_body_len)
+        require_non_negative_integer("http.response_body_len", self.response_body_len, allow_none=True)
 
         for field_name in ("user_agent", "version", "response_content_type"):
             value = getattr(self, field_name)
@@ -358,6 +307,19 @@ class DnsLookupEvent(SourceNeutralEvent):
 
     event_type: ClassVar[str] = "dns_lookup"
 
+    def __post_init__(self) -> None:
+        """
+        Validate and normalize DNS lookup event fields.
+
+        Returns:
+            None: The frozen instance is updated through dataclass internals during initialization.
+        """
+        super().__post_init__()
+
+        if self.resolved_addresses is not None:
+            for index, resolved_address in enumerate(self.resolved_addresses):
+                require_ip_address(f"resolved_addresses[{index}]", resolved_address)
+
     def event_fields(self) -> dict[str, Any]:
         """
         Return DNS lookup fields for serialization.
@@ -396,6 +358,18 @@ class NetworkConnectionEvent(SourceNeutralEvent):
     attack: Optional[dict[str, Any]] = None
 
     event_type: ClassVar[str] = "network_connection"
+
+    def __post_init__(self) -> None:
+        """
+        Validate and normalize network connection event fields.
+
+        Returns:
+            None: The frozen instance is updated through dataclass internals during initialization.
+        """
+        super().__post_init__()
+        require_ip_address("source_ip", self.source_ip)
+        require_ip_address("destination_ip", self.destination_ip)
+        require_port_number("destination_port", self.destination_port)
 
     def event_fields(self) -> dict[str, Any]:
         """
@@ -473,6 +447,16 @@ class LinuxLocalLoginEvent(SourceNeutralEvent):
     attack: Optional[dict[str, Any]] = None
 
     event_type: ClassVar[str] = "linux_local_login"
+
+    def __post_init__(self) -> None:
+        """
+        Validate and normalize Linux local login event fields.
+
+        Returns:
+            None: The frozen instance is updated through dataclass internals during initialization.
+        """
+        super().__post_init__()
+        require_ip_address("source_ip", self.source_ip, allow_none=True)
 
     def event_fields(self) -> dict[str, Any]:
         """

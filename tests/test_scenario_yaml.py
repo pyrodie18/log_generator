@@ -1211,6 +1211,29 @@ def test_invalid_login_host_is_rejected_by_yaml_environment_validation() -> None
     )
 
 
+def test_invalid_login_source_ip_is_rejected_by_yaml_validation() -> None:
+    """
+    Verify YAML login events reject malformed source IP addresses with a field path.
+
+    Returns:
+        None: This test asserts validation error text directly.
+    """
+    assert_yaml_error_contains(
+        minimal_yaml(
+            """
+  - id: evt-login
+    type: linux_local_login
+    at: +0s
+    actor: user-alice
+    target_host: linux-ws-01
+    login_method: local_console
+    source_ip: not an address
+"""
+        ),
+        "events[0].source_ip: 'not an address' is invalid because must be a valid IP address",
+    )
+
+
 def test_web_request_to_non_http_service_is_rejected() -> None:
     """
     Verify web_request events cannot target non-HTTP services.

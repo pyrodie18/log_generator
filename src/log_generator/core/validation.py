@@ -14,6 +14,7 @@ from log_generator.core.events import (
     WebRequestEvent,
 )
 from log_generator.core.scenarios import Scenario
+from log_generator.core.value_checks import is_http_status_code
 
 
 @dataclass(frozen=True)
@@ -381,7 +382,7 @@ def _validate_web_request(
                     f"route '{event.method} {event.path}' must exist on service '{service.id}'",
                 )
             )
-        elif event.status_code < 100 or event.status_code > 599:
+        elif not is_http_status_code(event.status_code):
             errors.append(
                 _error(
                     scenario_id,

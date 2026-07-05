@@ -269,3 +269,60 @@ def test_event_status_must_be_supported() -> None:
             path="/",
             status_code=200,
         )
+
+
+def test_network_connection_requires_valid_ip_addresses_and_port() -> None:
+    """
+    Verify network connection event fields reject invalid address and port values.
+
+    Returns:
+        None: This test asserts validation failures directly.
+    """
+    with pytest.raises(ValueError, match="source_ip must be a valid IP address"):
+        NetworkConnectionEvent(
+            event_id="evt-invalid-network",
+            scenario_id="scenario-invalid",
+            timestamp=datetime(2026, 1, 15, 14, 0, 4, tzinfo=timezone.utc),
+            status="success",
+            correlation_id="corr-invalid",
+            source_host_id="linux-ws-01",
+            source_ip="not an address",
+            destination_ip="10.10.20.21",
+            destination_port=80,
+            network_protocol="tcp",
+        )
+
+    with pytest.raises(ValueError, match="destination_port must be between 0 and 65535"):
+        NetworkConnectionEvent(
+            event_id="evt-invalid-network",
+            scenario_id="scenario-invalid",
+            timestamp=datetime(2026, 1, 15, 14, 0, 4, tzinfo=timezone.utc),
+            status="success",
+            correlation_id="corr-invalid",
+            source_host_id="linux-ws-01",
+            source_ip="10.10.10.11",
+            destination_ip="10.10.20.21",
+            destination_port=70000,
+            network_protocol="tcp",
+        )
+
+
+def test_dns_lookup_requires_valid_resolved_addresses() -> None:
+    """
+    Verify DNS lookup answer addresses must be syntactically valid IP addresses.
+
+    Returns:
+        None: This test asserts validation failures directly.
+    """
+    with pytest.raises(ValueError, match=r"resolved_addresses\[0\] must be a valid IP address"):
+        DnsLookupEvent(
+            event_id="evt-invalid-dns",
+            scenario_id="scenario-invalid",
+            timestamp=datetime(2026, 1, 15, 14, 0, 3, tzinfo=timezone.utc),
+            status="success",
+            correlation_id="corr-invalid",
+            source_host_id="linux-ws-01",
+            query_name="web-server-01.internal",
+            query_type="A",
+            resolved_addresses=["not an address"],
+        )

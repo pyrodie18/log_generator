@@ -13,6 +13,7 @@ from log_generator.core.environment import Environment, Service, build_linux_min
 from log_generator.core.events import DnsLookupEvent, NetworkConnectionEvent, SourceNeutralEvent, WebRequestEvent
 from log_generator.core.events import normalize_utc_timestamp
 from log_generator.core.scenarios import Scenario, ScenarioEvent
+from log_generator.core.value_checks import is_integer, is_non_negative_integer, is_port_number
 from log_generator.output.jsonl import safe_output_path
 
 
@@ -1444,10 +1445,10 @@ def render_zeek_count(value: Optional[int]) -> str:
     if value is None:
         return render_zeek_unset()
 
-    if isinstance(value, bool) or not isinstance(value, int):
+    if not is_integer(value):
         raise ValueError(f"expected integer for Zeek count field, got {type(value).__name__}")
 
-    if value < 0:
+    if not is_non_negative_integer(value):
         raise ValueError("Zeek count fields must be non-negative")
 
     return str(value)
@@ -1468,7 +1469,7 @@ def render_zeek_port(value: Optional[int]) -> str:
 
     count_value = render_zeek_count(value)
 
-    if value > 65535:
+    if not is_port_number(value):
         raise ValueError("Zeek port fields must be between 0 and 65535")
 
     return count_value
