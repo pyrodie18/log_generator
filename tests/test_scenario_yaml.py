@@ -787,9 +787,72 @@ def test_unknown_top_level_field_is_rejected() -> None:
     )
 
 
-def test_source_specific_output_family_is_rejected_for_phase_2() -> None:
+def test_zeek_output_family_loads_with_generic_normalized() -> None:
     """
-    Verify source-specific output families fail explicitly in Phase 2.
+    Verify Zeek can be requested alongside generic normalized output.
+
+    Returns:
+        None: This test asserts parsed output families directly.
+    """
+    parsed = parse_scenario_yaml_text(
+        minimal_yaml(
+            """
+  - id: evt-benign-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /
+""",
+            extra_top_level="""
+output_families:
+  - generic-normalized
+  - zeek
+""",
+        )
+    )
+
+    assert parsed.output_families == ("generic-normalized", "zeek")
+
+
+def test_zeek_only_output_family_loads() -> None:
+    """
+    Verify Zeek can be the only requested output family.
+
+    Returns:
+        None: This test asserts parsed output families directly.
+    """
+    parsed = parse_scenario_yaml_text(
+        minimal_yaml(
+            """
+  - id: evt-benign-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /
+""",
+            extra_top_level="""
+output_families:
+  - zeek
+""",
+        )
+    )
+
+    assert parsed.output_families == ("zeek",)
+
+
+@pytest.mark.parametrize("output_family", ["apache", "auditd", "firewall", "proxy"])
+def test_unsupported_source_specific_output_families_are_rejected(output_family: str) -> None:
+    """
+    Verify future source-specific output families fail explicitly.
+
+    Args:
+        output_family (str): Unsupported source-specific output family to request.
 
     Returns:
         None: This test asserts validation error text directly.
@@ -809,10 +872,11 @@ def test_source_specific_output_family_is_rejected_for_phase_2() -> None:
             extra_top_level="""
 output_families:
   - generic-normalized
-  - zeek
-""",
+  - {output_family}
+""".format(output_family=output_family),
         ),
-        "output_families[1]: 'zeek' is invalid because source-specific output families are not supported in Phase 2",
+        "output_families[1]: "
+        f"'{output_family}' is invalid because source-specific output family is not supported yet",
     )
 
 
@@ -842,6 +906,36 @@ output_families:
 """,
         ),
         "output_families[1]: 'custom-family' is invalid because unsupported output family",
+    )
+
+
+def test_duplicate_output_family_is_rejected() -> None:
+    """
+    Verify duplicate output families fail before scenario generation.
+
+    Returns:
+        None: This test asserts validation error text directly.
+    """
+    assert_yaml_error_contains(
+        minimal_yaml(
+            """
+  - id: evt-benign-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /
+""",
+            extra_top_level="""
+output_families:
+  - generic-normalized
+  - zeek
+  - zeek
+""",
+        ),
+        "output_families[2]: 'zeek' is invalid because duplicate output family",
     )
 
 

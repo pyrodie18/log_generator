@@ -16,7 +16,7 @@ GENERIC_NORMALIZED_EVENTS_PATH = (
     "generic-normalized",
     "events.jsonl",
 )
-SOURCE_SPECIFIC_OUTPUT_FAMILIES = frozenset({"apache", "auditd", "firewall", "zeek"})
+SOURCE_SPECIFIC_OUTPUT_FAMILIES = frozenset({"apache", "auditd", "firewall", "proxy", "zeek"})
 
 
 def write_generic_normalized_events(output_root: Path, scenarios: tuple[Scenario, ...]) -> Path:

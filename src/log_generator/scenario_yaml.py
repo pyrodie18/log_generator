@@ -24,7 +24,8 @@ from log_generator.output.manifest import write_output_manifest
 
 SUPPORTED_SCHEMA_VERSION = "scenario/v0.1"
 DEFAULT_OUTPUT_FAMILIES = ("generic-normalized",)
-SUPPORTED_OUTPUT_FAMILIES = frozenset(DEFAULT_OUTPUT_FAMILIES)
+SUPPORTED_OUTPUT_FAMILIES = frozenset((*DEFAULT_OUTPUT_FAMILIES, "zeek"))
+UNSUPPORTED_SOURCE_SPECIFIC_OUTPUT_FAMILIES = SOURCE_SPECIFIC_OUTPUT_FAMILIES - SUPPORTED_OUTPUT_FAMILIES
 SUPPORTED_EVENT_TYPES = frozenset({"web_request", "linux_local_login"})
 TOP_LEVEL_FIELDS = frozenset(
     {
@@ -1648,6 +1649,7 @@ def _parse_output_families(
         return DEFAULT_OUTPUT_FAMILIES
 
     output_families = []
+    seen_output_families = set()
 
     for index, output_family in enumerate(value):
         field_path = f"output_families[{index}]"
@@ -1658,13 +1660,13 @@ def _parse_output_families(
 
         _validate_safe_identifier(output_family, field_path, scenario_id, errors)
 
-        if output_family in SOURCE_SPECIFIC_OUTPUT_FAMILIES:
+        if output_family in UNSUPPORTED_SOURCE_SPECIFIC_OUTPUT_FAMILIES:
             errors.append(
                 _error(
                     scenario_id,
                     field_path,
                     output_family,
-                    "source-specific output families are not supported in Phase 2",
+                    "source-specific output family is not supported yet",
                 )
             )
             continue
@@ -1673,6 +1675,11 @@ def _parse_output_families(
             errors.append(_error(scenario_id, field_path, output_family, "unsupported output family"))
             continue
 
+        if output_family in seen_output_families:
+            errors.append(_error(scenario_id, field_path, output_family, "duplicate output family"))
+            continue
+
+        seen_output_families.add(output_family)
         output_families.append(output_family)
 
     return tuple(output_families)
@@ -2428,6 +2435,7 @@ __all__ = [
     "SUPPORTED_SCHEMA_VERSION",
     "ScenarioYamlError",
     "ScenarioYamlValidationError",
+    "UNSUPPORTED_SOURCE_SPECIFIC_OUTPUT_FAMILIES",
     "build_scenario_from_parsed_yaml",
     "build_scenario_from_yaml",
     "build_scenario_from_yaml_text",
