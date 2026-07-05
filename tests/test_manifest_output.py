@@ -3,6 +3,7 @@ Tests for output manifest and metadata writers.
 """
 
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -185,3 +186,69 @@ def test_manifest_file_entries_match_files_written(tmp_path: Path) -> None:
 
     for relative_path in file_paths:
         assert (tmp_path / relative_path).exists()
+
+
+def test_manifest_includes_zeek_files_when_requested(tmp_path: Path) -> None:
+    """
+    Verify mixed generic and Zeek output writes all requested file entries.
+
+    Args:
+        tmp_path (Path): Pytest temporary output directory.
+
+    Returns:
+        None: This test asserts manifest file entries for Zeek output.
+    """
+    scenario = replace(
+        build_benign_internal_web_scenario(),
+        output_families=("generic-normalized", "zeek"),
+    )
+    manifest_path = write_output_manifest(
+        tmp_path,
+        (scenario,),
+        "run-benign-zeek-001",
+        generated_at=datetime(2026, 1, 15, 14, 0, 3, tzinfo=timezone.utc),
+    )
+    manifest = read_json(manifest_path)
+    files_by_path = {entry["path"]: entry for entry in manifest["files"]}
+
+    assert sorted(files_by_path) == [
+        "logs/source-neutral-core/generic-normalized/events.jsonl",
+        "logs/zeek-sensor-01/zeek/conn.log",
+        "logs/zeek-sensor-01/zeek/dns.log",
+        "logs/zeek-sensor-01/zeek/http.log",
+    ]
+    assert manifest["requested_output_families"] == ["generic-normalized", "zeek"]
+    assert files_by_path["logs/zeek-sensor-01/zeek/conn.log"]["record_count"] == 2
+    assert files_by_path["logs/zeek-sensor-01/zeek/conn.log"]["format"] == "zeek-tsv"
+    assert files_by_path["logs/zeek-sensor-01/zeek/conn.log"]["timestamp_fields"] == ["ts"]
+    assert files_by_path["logs/zeek-sensor-01/zeek/dns.log"]["event_types"] == ["dns_lookup"]
+    assert files_by_path["logs/zeek-sensor-01/zeek/http.log"]["event_types"] == ["web_request"]
+    assert manifest["omitted_streams"] == []
+
+
+def test_zeek_only_manifest_skips_generic_output(tmp_path: Path) -> None:
+    """
+    Verify Zeek-only output writes no generic normalized events file.
+
+    Args:
+        tmp_path (Path): Pytest temporary output directory.
+
+    Returns:
+        None: This test asserts Zeek-only manifest behavior.
+    """
+    scenario = replace(build_benign_internal_web_scenario(), output_families=("zeek",))
+    manifest_path = write_output_manifest(
+        tmp_path,
+        (scenario,),
+        "run-benign-zeek-only-001",
+        generated_at=datetime(2026, 1, 15, 14, 0, 3, tzinfo=timezone.utc),
+    )
+    manifest = read_json(manifest_path)
+
+    assert [entry["path"] for entry in manifest["files"]] == [
+        "logs/zeek-sensor-01/zeek/conn.log",
+        "logs/zeek-sensor-01/zeek/dns.log",
+        "logs/zeek-sensor-01/zeek/http.log",
+    ]
+    assert manifest["requested_output_families"] == ["zeek"]
+    assert not (tmp_path / "logs" / "source-neutral-core" / "generic-normalized" / "events.jsonl").exists()

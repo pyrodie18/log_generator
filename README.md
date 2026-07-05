@@ -41,6 +41,30 @@ Scenarios with answer-key records also include:
 metadata/ground-truth.jsonl
 ```
 
+To also generate native-style Zeek TSV for visible DNS and HTTP traffic, include `zeek` in the scenario
+`output_families` list:
+
+```yaml
+output_families:
+  - generic-normalized
+  - zeek
+```
+
+Zeek output is written under the source-specific sensor path:
+
+```text
+output/benign/
+  manifest.json
+  logs/source-neutral-core/generic-normalized/events.jsonl
+  logs/zeek-sensor-01/zeek/conn.log
+  logs/zeek-sensor-01/zeek/dns.log
+  logs/zeek-sensor-01/zeek/http.log
+  metadata/scenario-manifest.json
+```
+
+Zeek-only scenarios are also supported with `output_families: [zeek]`. In that mode the generic normalized JSONL file is
+not written. Empty Zeek streams are reported in `manifest.json` and no empty log files are created.
+
 Use `--run-id` to set an explicit manifest run ID and `--generated-at` with a timezone-aware ISO 8601 timestamp for
 reproducible examples:
 
@@ -55,8 +79,10 @@ log-generator generate \
 Validation happens before output is written. Expected authoring errors are reported as concise `error:` messages with
 the scenario ID, field path, invalid value, and reason.
 
-Phase 2 generates only the generic normalized source-neutral output. Source-specific Zeek, Apache, auditd, and firewall
-logs remain future work.
+Phase 3 Zeek output targets core Zeek 8.2.x and 8.0.x LTS-compatible TSV fields for `conn.log`, `dns.log`, and
+`http.log` in the `linux-mini-lab` environment. Local host-only events, such as local Linux login activity, do not
+produce Zeek network records. Zeek `ssl.log`, `files.log`, Apache, auditd, firewall, proxy, SIEM ingestion, and
+dashboard configuration remain future work.
 
 ## Development
 

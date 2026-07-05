@@ -2,10 +2,16 @@
 Tests for Zeek native TSV schema and rendering helpers.
 """
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
+from log_generator.core.scenarios import (
+    build_benign_internal_web_scenario,
+    build_local_account_misuse_web_scenario,
+)
 from log_generator.output.zeek import (
     ZEEK_EMPTY_FIELD,
     ZEEK_UNSET_FIELD,
@@ -21,9 +27,36 @@ from log_generator.output.zeek import (
     render_zeek_value,
     render_zeek_vector,
     schema_for_stream,
+    write_zeek_logs,
     zeek_schema_field_names,
     zeek_schema_field_types,
 )
+
+
+def read_zeek_records(path: Path) -> list[dict[str, str]]:
+    """
+    Read Zeek TSV data rows into dictionaries keyed by the #fields header.
+
+    Args:
+        path (Path): Zeek TSV log file to read.
+
+    Returns:
+        list[dict[str, str]]: Parsed data records.
+    """
+    fields = []
+    records = []
+
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("#fields\t"):
+            fields = line.split("\t")[1:]
+            continue
+
+        if line.startswith("#"):
+            continue
+
+        records.append(dict(zip(fields, line.split("\t"))))
+
+    return records
 
 
 def test_zeek_conn_schema_matches_minimum_field_target() -> None:
@@ -375,3 +408,88 @@ def test_zeek_rendering_rejects_unsafe_tsv_values() -> None:
 
     with pytest.raises(ValueError, match="between 0 and 65535"):
         render_zeek_value(70000, "port")
+
+
+def test_zeek_writer_generates_visible_benign_dns_and_http_streams(tmp_path: Path) -> None:
+    """
+    Verify the Zeek writer emits linked conn, dns, and http records for the benign web scenario.
+
+    Args:
+        tmp_path (Path): Pytest temporary output directory.
+
+    Returns:
+        None: This test asserts generated Zeek files and record relationships.
+    """
+    scenario = replace(
+        build_benign_internal_web_scenario(),
+        output_families=("generic-normalized", "zeek"),
+    )
+    generated_at = datetime(2026, 1, 15, 14, 0, 3, tzinfo=timezone.utc)
+
+    result = write_zeek_logs(tmp_path, (scenario,), generated_at=generated_at)
+    conn_records = read_zeek_records(tmp_path / "logs" / "zeek-sensor-01" / "zeek" / "conn.log")
+    dns_records = read_zeek_records(tmp_path / "logs" / "zeek-sensor-01" / "zeek" / "dns.log")
+    http_records = read_zeek_records(tmp_path / "logs" / "zeek-sensor-01" / "zeek" / "http.log")
+
+    assert [zeek_file.stream_name for zeek_file in result.files] == ["conn", "dns", "http"]
+    assert result.omitted_streams == ()
+    assert len(conn_records) == 2
+    assert len(dns_records) == 1
+    assert len(http_records) == 1
+    assert dns_records[0]["query"] == "web-server-01.internal"
+    assert dns_records[0]["uid"] == conn_records[0]["uid"]
+    assert dns_records[0]["id.orig_p"] == conn_records[0]["id.orig_p"]
+    assert http_records[0]["method"] == "GET"
+    assert http_records[0]["uri"] == "/"
+    assert http_records[0]["status_code"] == "200"
+    assert http_records[0]["uid"] == conn_records[1]["uid"]
+    assert http_records[0]["id.orig_p"] == conn_records[1]["id.orig_p"]
+
+
+def test_zeek_writer_reuses_http_connection_for_misuse_sequence(tmp_path: Path) -> None:
+    """
+    Verify multiple HTTP requests on the misuse scenario reuse one connection UID with increasing depths.
+
+    Args:
+        tmp_path (Path): Pytest temporary output directory.
+
+    Returns:
+        None: This test asserts generated Zeek HTTP transaction relationships.
+    """
+    scenario = replace(build_local_account_misuse_web_scenario(), output_families=("zeek",))
+    generated_at = datetime(2026, 1, 15, 3, 12, 29, tzinfo=timezone.utc)
+
+    write_zeek_logs(tmp_path, (scenario,), generated_at=generated_at)
+    conn_records = read_zeek_records(tmp_path / "logs" / "zeek-sensor-01" / "zeek" / "conn.log")
+    http_records = read_zeek_records(tmp_path / "logs" / "zeek-sensor-01" / "zeek" / "http.log")
+    http_connection_uid = conn_records[1]["uid"]
+
+    assert [record["uri"] for record in http_records] == ["/admin", "/admin/archive.tar.gz"]
+    assert [record["trans_depth"] for record in http_records] == ["1", "2"]
+    assert {record["uid"] for record in http_records} == {http_connection_uid}
+    assert http_records[1]["resp_filenames"] == "archive.tar.gz"
+    assert http_records[1]["resp_mime_types"] == "application/gzip"
+
+
+def test_zeek_writer_omits_empty_streams_without_creating_files(tmp_path: Path) -> None:
+    """
+    Verify Zeek-only runs with no visible network events record omitted streams without empty files.
+
+    Args:
+        tmp_path (Path): Pytest temporary output directory.
+
+    Returns:
+        None: This test asserts omitted stream behavior.
+    """
+    misuse_scenario = build_local_account_misuse_web_scenario()
+    scenario = replace(misuse_scenario, events=misuse_scenario.events[:1], output_families=("zeek",))
+
+    result = write_zeek_logs(
+        tmp_path,
+        (scenario,),
+        generated_at=datetime(2026, 1, 15, 3, 12, 29, tzinfo=timezone.utc),
+    )
+
+    assert result.files == ()
+    assert [stream.log_stream for stream in result.omitted_streams] == ["conn.log", "dns.log", "http.log"]
+    assert not (tmp_path / "logs" / "zeek-sensor-01").exists()

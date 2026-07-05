@@ -3,10 +3,17 @@ Zeek native TSV schema and rendering helpers.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from hashlib import sha1
+from math import ceil
+from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
+from log_generator.core.environment import Environment, Service, build_linux_mini_lab
+from log_generator.core.events import DnsLookupEvent, NetworkConnectionEvent, SourceNeutralEvent, WebRequestEvent
 from log_generator.core.events import normalize_utc_timestamp
+from log_generator.core.scenarios import Scenario, ScenarioEvent
+from log_generator.output.jsonl import safe_output_path
 
 
 ZEEK_FIELD_SEPARATOR = "\t"
@@ -14,6 +21,13 @@ ZEEK_SEPARATOR_DIRECTIVE = r"\x09"
 ZEEK_SET_SEPARATOR = ","
 ZEEK_EMPTY_FIELD = "(empty)"
 ZEEK_UNSET_FIELD = "-"
+ZEEK_SENSOR_ID = "zeek-sensor-01"
+ZEEK_OUTPUT_PATH = ("logs", ZEEK_SENSOR_ID, "zeek")
+ZEEK_STREAM_FILE_NAMES = {
+    "conn": "conn.log",
+    "dns": "dns.log",
+    "http": "http.log",
+}
 
 
 @dataclass(frozen=True)
@@ -34,6 +48,59 @@ class ZeekStreamSchema:
 
     path: str
     fields: tuple[ZeekField, ...]
+
+
+@dataclass(frozen=True)
+class ZeekFlowContext:
+    """
+    Describe shared connection facts used by Zeek records for a single flow.
+    """
+
+    uid: str
+    source_ip: str
+    source_port: int
+    destination_ip: str
+    destination_port: int
+    network_protocol: str
+    application_protocol: str
+    source_host_id: str
+    destination_host_id: str
+    timestamp: datetime
+
+
+@dataclass(frozen=True)
+class ZeekWrittenFile:
+    """
+    Describe one Zeek log file written to disk.
+    """
+
+    path: Path
+    stream_name: str
+    record_count: int
+    scenario_ids: tuple[str, ...]
+    event_types: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ZeekOmittedStream:
+    """
+    Describe one requested Zeek stream skipped because it had no records.
+    """
+
+    source_id: str
+    log_family: str
+    log_stream: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class ZeekWriteResult:
+    """
+    Describe Zeek files written and streams intentionally omitted.
+    """
+
+    files: tuple[ZeekWrittenFile, ...]
+    omitted_streams: tuple[ZeekOmittedStream, ...]
 
 
 ZEEK_STREAM_SCHEMAS = {
@@ -193,6 +260,916 @@ def render_zeek_log(
     lines.append(render_zeek_close(closed_at))
 
     return "\n".join(lines) + "\n"
+
+
+def write_zeek_logs(
+    output_root: Path,
+    scenarios: tuple[Scenario, ...],
+    generated_at: Optional[datetime] = None,
+) -> ZeekWriteResult:
+    """
+    Write requested Zeek TSV logs for scenarios that include the Zeek output family.
+
+    Args:
+        output_root (Path): Root output directory where generated artifacts should be written.
+        scenarios (tuple[Scenario, ...]): Scenarios whose Zeek output should be generated.
+        generated_at (Optional[datetime]): Deterministic wall-clock time for Zeek headers.
+
+    Returns:
+        ZeekWriteResult: Written Zeek file metadata and any intentionally omitted streams.
+    """
+    zeek_scenarios = tuple(scenario for scenario in scenarios if "zeek" in scenario.output_families)
+
+    if not zeek_scenarios:
+        return ZeekWriteResult(files=(), omitted_streams=())
+
+    if generated_at is None:
+        generated_at = datetime.now(timezone.utc)
+
+    generated_at = normalize_utc_timestamp(generated_at)
+    records_by_stream, event_types_by_stream = build_zeek_records(zeek_scenarios)
+    written_files = []
+    omitted_streams = []
+
+    for stream_name in ("conn", "dns", "http"):
+        records = records_by_stream[stream_name]
+        file_name = ZEEK_STREAM_FILE_NAMES[stream_name]
+
+        if not records:
+            omitted_streams.append(
+                ZeekOmittedStream(
+                    source_id=ZEEK_SENSOR_ID,
+                    log_family="zeek",
+                    log_stream=file_name,
+                    reason="no matching visible records",
+                )
+            )
+            continue
+
+        log_path = safe_output_path(output_root, (*ZEEK_OUTPUT_PATH, file_name))
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(render_zeek_log(stream_name, records, generated_at), encoding="utf-8")
+        written_files.append(
+            ZeekWrittenFile(
+                path=log_path,
+                stream_name=stream_name,
+                record_count=len(records),
+                scenario_ids=_scenario_ids_for_records(records),
+                event_types=tuple(event_types_by_stream[stream_name]),
+            )
+        )
+
+    return ZeekWriteResult(files=tuple(written_files), omitted_streams=tuple(omitted_streams))
+
+
+def build_zeek_records(
+    scenarios: tuple[Scenario, ...],
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[str]]]:
+    """
+    Build Zeek records for requested scenarios without writing files.
+
+    Args:
+        scenarios (tuple[Scenario, ...]): Zeek-enabled scenarios to convert.
+
+    Returns:
+        tuple[dict[str, list[dict[str, Any]]], dict[str, list[str]]]: Records and source event types by stream.
+    """
+    records_by_stream: dict[str, list[dict[str, Any]]] = {"conn": [], "dns": [], "http": []}
+    event_types_by_stream: dict[str, list[str]] = {"conn": [], "dns": [], "http": []}
+
+    for scenario in scenarios:
+        environment = _environment_for_scenario(scenario)
+        ordered_scenario_events = tuple(sorted(scenario.events, key=ScenarioEvent.sort_key))
+        events_by_id = {
+            scenario_event.event.event_id: scenario_event.event for scenario_event in ordered_scenario_events
+        }
+        flow_contexts = _build_flow_contexts(scenario, environment, ordered_scenario_events)
+        http_depths: dict[str, int] = {}
+
+        for scenario_event in ordered_scenario_events:
+            event = scenario_event.event
+
+            if isinstance(event, DnsLookupEvent):
+                flow_context = flow_contexts.get(_dns_flow_key(event))
+
+                if flow_context is None or not _flow_is_visible(environment, flow_context):
+                    continue
+
+                _append_record(records_by_stream, event_types_by_stream, "conn", _dns_conn_record(event, flow_context))
+                _append_record(records_by_stream, event_types_by_stream, "dns", _dns_record(event, flow_context))
+                continue
+
+            if isinstance(event, NetworkConnectionEvent):
+                flow_context = flow_contexts.get(_connection_flow_key(event))
+
+                if flow_context is None or not _flow_is_visible(environment, flow_context):
+                    continue
+
+                web_requests = _web_requests_for_connection(events_by_id.values(), event.event_id)
+                _append_record(
+                    records_by_stream,
+                    event_types_by_stream,
+                    "conn",
+                    _connection_record(event, flow_context, web_requests),
+                )
+                continue
+
+            if isinstance(event, WebRequestEvent):
+                flow_context = flow_contexts.get(_http_flow_key(event))
+
+                if flow_context is None or not _flow_is_visible(environment, flow_context):
+                    continue
+
+                depth_key = flow_context.uid
+                http_depths[depth_key] = http_depths.get(depth_key, 0) + 1
+                _append_record(
+                    records_by_stream,
+                    event_types_by_stream,
+                    "http",
+                    _http_record(event, flow_context, environment, http_depths[depth_key]),
+                )
+
+    for stream_name, records in records_by_stream.items():
+        records_by_stream[stream_name] = sorted(records, key=_zeek_record_sort_key)
+
+    return records_by_stream, event_types_by_stream
+
+
+def _append_record(
+    records_by_stream: dict[str, list[dict[str, Any]]],
+    event_types_by_stream: dict[str, list[str]],
+    stream_name: str,
+    record: dict[str, Any],
+) -> None:
+    """
+    Append a record and track first-seen source event types for the stream.
+
+    Args:
+        records_by_stream (dict[str, list[dict[str, Any]]]): Records collected by stream.
+        event_types_by_stream (dict[str, list[str]]): Source event types collected by stream.
+        stream_name (str): Zeek stream receiving the record.
+        record (dict[str, Any]): Record to append.
+
+    Returns:
+        None: The provided dictionaries are updated in place.
+    """
+    records_by_stream[stream_name].append(record)
+    event_type = str(record["_event_type"])
+
+    if event_type not in event_types_by_stream[stream_name]:
+        event_types_by_stream[stream_name].append(event_type)
+
+
+def _build_flow_contexts(
+    scenario: Scenario,
+    environment: Environment,
+    ordered_scenario_events: tuple[ScenarioEvent, ...],
+) -> dict[str, ZeekFlowContext]:
+    """
+    Build deterministic shared flow context for DNS, connection, and HTTP records.
+
+    Args:
+        scenario (Scenario): Scenario owning the events.
+        environment (Environment): Environment used to resolve host and service facts.
+        ordered_scenario_events (tuple[ScenarioEvent, ...]): Scenario events in deterministic order.
+
+    Returns:
+        dict[str, ZeekFlowContext]: Flow contexts keyed by record-family-specific flow keys.
+    """
+    contexts = {}
+    connection_contexts_by_event_id = {}
+
+    for scenario_event in ordered_scenario_events:
+        event = scenario_event.event
+
+        if isinstance(event, DnsLookupEvent):
+            context = _build_dns_flow_context(scenario, environment, event)
+            contexts[_dns_flow_key(event)] = context
+            continue
+
+        if isinstance(event, NetworkConnectionEvent):
+            context = _build_connection_flow_context(scenario, event)
+            contexts[_connection_flow_key(event)] = context
+            connection_contexts_by_event_id[event.event_id] = context
+
+    for scenario_event in ordered_scenario_events:
+        event = scenario_event.event
+
+        if not isinstance(event, WebRequestEvent):
+            continue
+
+        if event.parent_event_id in connection_contexts_by_event_id:
+            contexts[_http_flow_key(event)] = connection_contexts_by_event_id[event.parent_event_id]
+
+    return contexts
+
+
+def _build_dns_flow_context(scenario: Scenario, environment: Environment, event: DnsLookupEvent) -> ZeekFlowContext:
+    """
+    Build shared flow context for a DNS lookup and its sibling Zeek connection record.
+
+    Args:
+        scenario (Scenario): Scenario owning the event.
+        environment (Environment): Environment used to resolve hosts and services.
+        event (DnsLookupEvent): DNS event to describe.
+
+    Returns:
+        ZeekFlowContext: Shared DNS flow context.
+    """
+    source_host = environment.require_host(event.source_host_id)
+    service = _service_for_event(environment, event, default_service_id="svc-dns")
+    destination_host = environment.require_host(service.target_host_id)
+
+    return ZeekFlowContext(
+        uid=_stable_zeek_uid(scenario, f"dns:{event.event_id}"),
+        source_ip=source_host.primary_ip,
+        source_port=_stable_client_port(scenario, f"dns:{event.event_id}"),
+        destination_ip=destination_host.primary_ip,
+        destination_port=service.port,
+        network_protocol=service.transport_protocol,
+        application_protocol=service.application_protocol,
+        source_host_id=source_host.id,
+        destination_host_id=destination_host.id,
+        timestamp=event.timestamp,
+    )
+
+
+def _build_connection_flow_context(scenario: Scenario, event: NetworkConnectionEvent) -> ZeekFlowContext:
+    """
+    Build shared flow context for a transport connection event.
+
+    Args:
+        scenario (Scenario): Scenario owning the event.
+        event (NetworkConnectionEvent): Connection event to describe.
+
+    Returns:
+        ZeekFlowContext: Shared connection flow context.
+    """
+    return ZeekFlowContext(
+        uid=_stable_zeek_uid(scenario, f"conn:{event.event_id}"),
+        source_ip=event.source_ip,
+        source_port=_stable_client_port(scenario, f"conn:{event.event_id}"),
+        destination_ip=event.destination_ip,
+        destination_port=event.destination_port,
+        network_protocol=event.network_protocol,
+        application_protocol=event.application_protocol or "-",
+        source_host_id=event.source_host_id,
+        destination_host_id=event.destination_host_id or "",
+        timestamp=event.timestamp,
+    )
+
+
+def _dns_conn_record(event: DnsLookupEvent, flow_context: ZeekFlowContext) -> dict[str, Any]:
+    """
+    Build a Zeek conn.log record for a DNS lookup.
+
+    Args:
+        event (DnsLookupEvent): Source DNS event.
+        flow_context (ZeekFlowContext): Shared flow context.
+
+    Returns:
+        dict[str, Any]: Zeek conn.log record.
+    """
+    response_size = 120 + 16 * len(event.resolved_addresses or ())
+
+    return _conn_record(
+        event=event,
+        flow_context=flow_context,
+        timestamp=event.timestamp,
+        duration=0.025,
+        service="dns",
+        orig_bytes=78,
+        resp_bytes=response_size,
+        history="Dd",
+        orig_pkts=1,
+        resp_pkts=1,
+        ip_header_bytes=28,
+    )
+
+
+def _connection_record(
+    event: NetworkConnectionEvent,
+    flow_context: ZeekFlowContext,
+    web_requests: tuple[WebRequestEvent, ...],
+) -> dict[str, Any]:
+    """
+    Build a Zeek conn.log record for a source-neutral connection event.
+
+    Args:
+        event (NetworkConnectionEvent): Source connection event.
+        flow_context (ZeekFlowContext): Shared flow context.
+        web_requests (tuple[WebRequestEvent, ...]): HTTP requests that reuse the connection.
+
+    Returns:
+        dict[str, Any]: Zeek conn.log record.
+    """
+    if web_requests:
+        last_request_time = max(web_request.timestamp for web_request in web_requests)
+        duration = max((last_request_time - event.timestamp).total_seconds() + 0.05, 0.001)
+        orig_bytes = sum(_http_request_size(web_request) for web_request in web_requests)
+        resp_bytes = sum(_http_response_size(web_request) for web_request in web_requests)
+    else:
+        duration = 0.050
+        orig_bytes = 60
+        resp_bytes = 60
+
+    return _conn_record(
+        event=event,
+        flow_context=flow_context,
+        timestamp=event.timestamp,
+        duration=duration,
+        service=flow_context.application_protocol,
+        orig_bytes=orig_bytes,
+        resp_bytes=resp_bytes,
+        history="ShADadFf",
+        orig_pkts=max(1, ceil(orig_bytes / 1200)),
+        resp_pkts=max(1, ceil(resp_bytes / 1200)),
+        ip_header_bytes=40,
+    )
+
+
+def _conn_record(
+    event: SourceNeutralEvent,
+    flow_context: ZeekFlowContext,
+    timestamp: datetime,
+    duration: float,
+    service: str,
+    orig_bytes: int,
+    resp_bytes: int,
+    history: str,
+    orig_pkts: int,
+    resp_pkts: int,
+    ip_header_bytes: int,
+) -> dict[str, Any]:
+    """
+    Build a Zeek conn.log record from normalized flow facts.
+
+    Args:
+        event (SourceNeutralEvent): Source event that caused the connection record.
+        flow_context (ZeekFlowContext): Shared flow context.
+        timestamp (datetime): Zeek record timestamp.
+        duration (float): Connection duration in seconds.
+        service (str): Zeek service value.
+        orig_bytes (int): Originator payload bytes.
+        resp_bytes (int): Responder payload bytes.
+        history (str): Zeek history value.
+        orig_pkts (int): Originator packet count.
+        resp_pkts (int): Responder packet count.
+        ip_header_bytes (int): Per-packet network and transport header estimate.
+
+    Returns:
+        dict[str, Any]: Zeek conn.log record.
+    """
+    return {
+        "_scenario_id": event.scenario_id,
+        "_event_type": event.event_type,
+        "ts": timestamp,
+        "uid": flow_context.uid,
+        "id.orig_h": flow_context.source_ip,
+        "id.orig_p": flow_context.source_port,
+        "id.resp_h": flow_context.destination_ip,
+        "id.resp_p": flow_context.destination_port,
+        "proto": flow_context.network_protocol,
+        "service": service,
+        "duration": duration,
+        "orig_bytes": orig_bytes,
+        "resp_bytes": resp_bytes,
+        "conn_state": "SF",
+        "local_orig": True,
+        "local_resp": True,
+        "missed_bytes": 0,
+        "history": history,
+        "orig_pkts": orig_pkts,
+        "orig_ip_bytes": orig_bytes + orig_pkts * ip_header_bytes,
+        "resp_pkts": resp_pkts,
+        "resp_ip_bytes": resp_bytes + resp_pkts * ip_header_bytes,
+        "tunnel_parents": [],
+        "ip_proto": _ip_protocol_number(flow_context.network_protocol),
+    }
+
+
+def _dns_record(event: DnsLookupEvent, flow_context: ZeekFlowContext) -> dict[str, Any]:
+    """
+    Build a Zeek dns.log record from a source-neutral DNS lookup.
+
+    Args:
+        event (DnsLookupEvent): Source DNS event.
+        flow_context (ZeekFlowContext): Shared flow context.
+
+    Returns:
+        dict[str, Any]: Zeek dns.log record.
+    """
+    rcode_name = (event.rcode or "NOERROR").upper()
+    answers = event.resolved_addresses or []
+
+    return {
+        "_scenario_id": event.scenario_id,
+        "_event_type": event.event_type,
+        "ts": event.timestamp,
+        "uid": flow_context.uid,
+        "id.orig_h": flow_context.source_ip,
+        "id.orig_p": flow_context.source_port,
+        "id.resp_h": flow_context.destination_ip,
+        "id.resp_p": flow_context.destination_port,
+        "proto": flow_context.network_protocol,
+        "trans_id": _stable_count(event.scenario_id, event.event_id, modulo=65536),
+        "rtt": 0.025,
+        "query": event.query_name,
+        "qclass": 1,
+        "qclass_name": "C_INTERNET",
+        "qtype": _dns_query_type_number(event.query_type),
+        "qtype_name": event.query_type.upper(),
+        "rcode": _dns_rcode_number(rcode_name),
+        "rcode_name": rcode_name,
+        "AA": False,
+        "TC": False,
+        "RD": True,
+        "RA": True,
+        "Z": 0,
+        "answers": answers,
+        "TTLs": [300.0 for _ in answers],
+        "rejected": event.status != "success" or rcode_name not in {"NOERROR", "NXDOMAIN"},
+    }
+
+
+def _http_record(
+    event: WebRequestEvent,
+    flow_context: ZeekFlowContext,
+    environment: Environment,
+    trans_depth: int,
+) -> dict[str, Any]:
+    """
+    Build a Zeek http.log record from a source-neutral web request.
+
+    Args:
+        event (WebRequestEvent): Source HTTP request event.
+        flow_context (ZeekFlowContext): Shared flow context.
+        environment (Environment): Environment used to resolve service names.
+        trans_depth (int): HTTP transaction depth for the connection.
+
+    Returns:
+        dict[str, Any]: Zeek http.log record.
+    """
+    service = environment.require_service(event.service_id)
+    response_file_name = _response_file_name(event)
+    response_mime_type = _response_mime_type(event, response_file_name)
+    response_file_id = None
+
+    if response_file_name is not None:
+        response_file_id = "F" + sha1(f"{event.scenario_id}:{event.event_id}:file".encode("utf-8")).hexdigest()[:10]
+
+    return {
+        "_scenario_id": event.scenario_id,
+        "_event_type": event.event_type,
+        "ts": event.timestamp,
+        "uid": flow_context.uid,
+        "id.orig_h": flow_context.source_ip,
+        "id.orig_p": flow_context.source_port,
+        "id.resp_h": flow_context.destination_ip,
+        "id.resp_p": flow_context.destination_port,
+        "trans_depth": trans_depth,
+        "method": event.method,
+        "host": service.names[0],
+        "uri": _http_uri(event),
+        "referrer": _header_value(event, "referer"),
+        "version": "1.1",
+        "user_agent": _header_value(event, "user-agent") or "Mozilla/5.0 log-generator/0.1",
+        "request_body_len": 0,
+        "response_body_len": _http_response_size(event),
+        "status_code": event.status_code,
+        "status_msg": _http_status_message(event.status_code),
+        "tags": [],
+        "resp_fuids": [response_file_id] if response_file_id is not None else None,
+        "resp_filenames": [response_file_name] if response_file_name is not None else None,
+        "resp_mime_types": [response_mime_type] if response_mime_type is not None else None,
+    }
+
+
+def _environment_for_scenario(scenario: Scenario) -> Environment:
+    """
+    Return the built-in environment supported by the Phase 3 Zeek writer.
+
+    Args:
+        scenario (Scenario): Scenario requesting Zeek output.
+
+    Returns:
+        Environment: Matching environment definition.
+    """
+    if scenario.environment_id != "linux-mini-lab":
+        raise ValueError("Zeek output currently supports only the linux-mini-lab environment")
+
+    environment = build_linux_mini_lab()
+
+    if scenario.environment_version != environment.version:
+        raise ValueError("Zeek output currently supports linux-mini-lab version 0.1")
+
+    return environment
+
+
+def _service_for_event(environment: Environment, event: SourceNeutralEvent, default_service_id: str) -> Service:
+    """
+    Resolve an event service with a deterministic fallback.
+
+    Args:
+        environment (Environment): Environment containing services.
+        event (SourceNeutralEvent): Event that may carry a service ID.
+        default_service_id (str): Service ID to use when the event omits one.
+
+    Returns:
+        Service: Resolved service.
+    """
+    service_id = getattr(event, "service_id", None) or default_service_id
+
+    return environment.require_service(service_id)
+
+
+def _flow_is_visible(environment: Environment, flow_context: ZeekFlowContext) -> bool:
+    """
+    Return whether zeek-sensor-01 can observe a flow.
+
+    Args:
+        environment (Environment): Environment containing host zones and visibility rules.
+        flow_context (ZeekFlowContext): Flow context to evaluate.
+
+    Returns:
+        bool: True when the Phase 3 Zeek sensor should emit records for the flow.
+    """
+    source_host = environment.get_host(flow_context.source_host_id)
+    destination_host = environment.get_host(flow_context.destination_host_id)
+
+    if source_host is None or destination_host is None:
+        return False
+
+    for visibility in environment.sensor_visibility:
+        if visibility.sensor_id != ZEEK_SENSOR_ID:
+            continue
+
+        if visibility.source_zone_id != source_host.zone_id:
+            continue
+
+        if visibility.destination_zone_id in {destination_host.zone_id, "any"}:
+            return visibility.visible
+
+    return False
+
+
+def _web_requests_for_connection(
+    events: Iterable[SourceNeutralEvent],
+    connection_event_id: str,
+) -> tuple[WebRequestEvent, ...]:
+    """
+    Return web requests that reuse a connection event.
+
+    Args:
+        events (Iterable[SourceNeutralEvent]): Events to inspect.
+        connection_event_id (str): Parent connection event ID.
+
+    Returns:
+        tuple[WebRequestEvent, ...]: Matching web requests.
+    """
+    web_requests = []
+
+    for event in events:
+        if isinstance(event, WebRequestEvent) and event.parent_event_id == connection_event_id:
+            web_requests.append(event)
+
+    return tuple(sorted(web_requests, key=lambda web_request: web_request.timestamp))
+
+
+def _dns_flow_key(event: DnsLookupEvent) -> str:
+    """
+    Return the deterministic flow key for a DNS event.
+
+    Args:
+        event (DnsLookupEvent): DNS event to key.
+
+    Returns:
+        str: Flow key.
+    """
+    return f"dns:{event.event_id}"
+
+
+def _connection_flow_key(event: NetworkConnectionEvent) -> str:
+    """
+    Return the deterministic flow key for a connection event.
+
+    Args:
+        event (NetworkConnectionEvent): Connection event to key.
+
+    Returns:
+        str: Flow key.
+    """
+    return f"conn:{event.event_id}"
+
+
+def _http_flow_key(event: WebRequestEvent) -> str:
+    """
+    Return the deterministic flow key for an HTTP event.
+
+    Args:
+        event (WebRequestEvent): HTTP event to key.
+
+    Returns:
+        str: Flow key.
+    """
+    return f"http:{event.parent_event_id}"
+
+
+def _stable_zeek_uid(scenario: Scenario, key: str) -> str:
+    """
+    Derive a stable Zeek UID from scenario and flow identity.
+
+    Args:
+        scenario (Scenario): Scenario owning the flow.
+        key (str): Flow-specific key.
+
+    Returns:
+        str: Zeek-safe connection UID.
+    """
+    return "C" + sha1(f"{scenario.id}:{scenario.seed}:{key}".encode("utf-8")).hexdigest()[:11]
+
+
+def _stable_client_port(scenario: Scenario, key: str) -> int:
+    """
+    Derive a stable ephemeral client source port for a flow.
+
+    Args:
+        scenario (Scenario): Scenario owning the flow.
+        key (str): Flow-specific key.
+
+    Returns:
+        int: TCP/UDP source port in the ephemeral range.
+    """
+    return 49152 + _stable_count(scenario.id, f"{scenario.seed}:{key}", modulo=16384)
+
+
+def _stable_count(scenario_id: str, key: str, modulo: int) -> int:
+    """
+    Derive a stable non-negative integer below a modulo.
+
+    Args:
+        scenario_id (str): Scenario identifier.
+        key (str): Value-specific key.
+        modulo (int): Exclusive upper bound.
+
+    Returns:
+        int: Deterministic count value.
+    """
+    digest = sha1(f"{scenario_id}:{key}".encode("utf-8")).hexdigest()
+
+    return int(digest[:8], 16) % modulo
+
+
+def _ip_protocol_number(network_protocol: str) -> int:
+    """
+    Return the IP protocol number for a transport protocol.
+
+    Args:
+        network_protocol (str): Transport protocol name.
+
+    Returns:
+        int: IP protocol number.
+    """
+    if network_protocol.lower() == "udp":
+        return 17
+
+    if network_protocol.lower() == "tcp":
+        return 6
+
+    return 0
+
+
+def _dns_query_type_number(query_type: str) -> int:
+    """
+    Return the DNS query type number for common query types.
+
+    Args:
+        query_type (str): DNS query type name.
+
+    Returns:
+        int: DNS query type number.
+    """
+    query_types = {
+        "A": 1,
+        "NS": 2,
+        "CNAME": 5,
+        "SOA": 6,
+        "PTR": 12,
+        "MX": 15,
+        "TXT": 16,
+        "AAAA": 28,
+    }
+
+    return query_types.get(query_type.upper(), 1)
+
+
+def _dns_rcode_number(rcode_name: str) -> int:
+    """
+    Return the DNS response code number for common response names.
+
+    Args:
+        rcode_name (str): DNS response code name.
+
+    Returns:
+        int: DNS response code number.
+    """
+    rcodes = {
+        "NOERROR": 0,
+        "FORMERR": 1,
+        "SERVFAIL": 2,
+        "NXDOMAIN": 3,
+        "NOTIMP": 4,
+        "REFUSED": 5,
+    }
+
+    return rcodes.get(rcode_name.upper(), 0)
+
+
+def _http_uri(event: WebRequestEvent) -> str:
+    """
+    Build the HTTP URI value from path and optional query string.
+
+    Args:
+        event (WebRequestEvent): HTTP event to inspect.
+
+    Returns:
+        str: URI value for Zeek http.log.
+    """
+    if event.query_string:
+        return f"{event.path}?{event.query_string}"
+
+    return event.path
+
+
+def _header_value(event: WebRequestEvent, header_name: str) -> Optional[str]:
+    """
+    Return a request header by case-insensitive name.
+
+    Args:
+        event (WebRequestEvent): HTTP event to inspect.
+        header_name (str): Header name to read.
+
+    Returns:
+        Optional[str]: Header value when present.
+    """
+    if event.request_headers is None:
+        return None
+
+    normalized_header_name = header_name.lower()
+
+    for key, value in event.request_headers.items():
+        if key.lower() == normalized_header_name:
+            return value
+
+    return None
+
+
+def _http_request_size(event: WebRequestEvent) -> int:
+    """
+    Estimate HTTP request bytes deterministically from request fields.
+
+    Args:
+        event (WebRequestEvent): HTTP event to inspect.
+
+    Returns:
+        int: Estimated request payload bytes.
+    """
+    header_size = 120
+
+    if event.request_headers:
+        header_size += sum(len(name) + len(value) + 4 for name, value in event.request_headers.items())
+
+    return header_size + len(event.method) + len(_http_uri(event))
+
+
+def _http_response_size(event: WebRequestEvent) -> int:
+    """
+    Estimate HTTP response body bytes from status and route metadata.
+
+    Args:
+        event (WebRequestEvent): HTTP event to inspect.
+
+    Returns:
+        int: Estimated response body bytes.
+    """
+    metadata = event.metadata or {}
+
+    if "response_body_len" in metadata:
+        return int(metadata["response_body_len"])
+
+    if metadata.get("download_classification") == "download":
+        return 32768
+
+    if event.status_code == 403:
+        return 512
+
+    if event.status_code == 404:
+        return 384
+
+    return 2048
+
+
+def _response_file_name(event: WebRequestEvent) -> Optional[str]:
+    """
+    Return the downloaded response file name when the event represents a download.
+
+    Args:
+        event (WebRequestEvent): HTTP event to inspect.
+
+    Returns:
+        Optional[str]: File name when available.
+    """
+    metadata = event.metadata or {}
+    file_name = metadata.get("file_name")
+
+    if isinstance(file_name, str) and file_name:
+        return file_name
+
+    return None
+
+
+def _response_mime_type(event: WebRequestEvent, file_name: Optional[str]) -> Optional[str]:
+    """
+    Return a deterministic response MIME type for http.log file metadata.
+
+    Args:
+        event (WebRequestEvent): HTTP event to inspect.
+        file_name (Optional[str]): Download file name, when present.
+
+    Returns:
+        Optional[str]: MIME type when file metadata should be emitted.
+    """
+    if event.response_content_type:
+        return event.response_content_type
+
+    if file_name is None:
+        return None
+
+    if file_name.endswith(".tar.gz") or file_name.endswith(".tgz"):
+        return "application/gzip"
+
+    return "application/octet-stream"
+
+
+def _http_status_message(status_code: int) -> str:
+    """
+    Return a common HTTP status message.
+
+    Args:
+        status_code (int): HTTP status code.
+
+    Returns:
+        str: HTTP status message.
+    """
+    status_messages = {
+        200: "OK",
+        201: "Created",
+        204: "No Content",
+        301: "Moved Permanently",
+        302: "Found",
+        400: "Bad Request",
+        401: "Unauthorized",
+        403: "Forbidden",
+        404: "Not Found",
+        500: "Internal Server Error",
+        502: "Bad Gateway",
+        503: "Service Unavailable",
+    }
+
+    return status_messages.get(status_code, "Unknown")
+
+
+def _scenario_ids_for_records(records: list[dict[str, Any]]) -> tuple[str, ...]:
+    """
+    Return first-seen scenario IDs for a set of Zeek records.
+
+    Args:
+        records (list[dict[str, Any]]): Zeek records to inspect.
+
+    Returns:
+        tuple[str, ...]: Scenario IDs.
+    """
+    scenario_ids = []
+
+    for record in records:
+        scenario_id = str(record["_scenario_id"])
+        if scenario_id not in scenario_ids:
+            scenario_ids.append(scenario_id)
+
+    return tuple(scenario_ids)
+
+
+def _zeek_record_sort_key(record: Mapping[str, Any]) -> tuple[Any, str]:
+    """
+    Return deterministic ordering for Zeek records.
+
+    Args:
+        record (Mapping[str, Any]): Zeek record to sort.
+
+    Returns:
+        tuple[Any, str]: Timestamp followed by UID.
+    """
+    return record["ts"], str(record["uid"])
 
 
 def render_zeek_header(stream_name: str, opened_at: datetime) -> str:
@@ -616,11 +1593,18 @@ __all__ = [
     "ZEEK_FIELD_SEPARATOR",
     "ZEEK_SEPARATOR_DIRECTIVE",
     "ZEEK_SET_SEPARATOR",
+    "ZEEK_SENSOR_ID",
     "ZEEK_STREAM_SCHEMAS",
+    "ZEEK_STREAM_FILE_NAMES",
     "ZEEK_UNSET_FIELD",
+    "ZeekFlowContext",
     "ZeekField",
+    "ZeekOmittedStream",
     "ZeekStreamSchema",
+    "ZeekWriteResult",
+    "ZeekWrittenFile",
     "build_zeek_header_lines",
+    "build_zeek_records",
     "format_zeek_header_time",
     "format_zeek_timestamp",
     "render_zeek_bool",
@@ -638,6 +1622,7 @@ __all__ = [
     "render_zeek_value",
     "render_zeek_vector",
     "schema_for_stream",
+    "write_zeek_logs",
     "zeek_schema_field_names",
     "zeek_schema_field_types",
 ]

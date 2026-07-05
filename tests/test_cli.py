@@ -230,6 +230,57 @@ def test_cli_generate_writes_misuse_ground_truth(tmp_path: Path, capsys) -> None
     assert ground_truth[0]["label"] == "suspicious_internal_web_download"
 
 
+def test_cli_generate_writes_zeek_output_when_requested(tmp_path: Path, capsys) -> None:
+    """
+    Verify the generate command writes Zeek streams when requested by YAML.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory.
+        capsys (CaptureFixture): Pytest stdout and stderr capture fixture.
+
+    Returns:
+        None: This test asserts generated Zeek files and manifest entries.
+    """
+    scenario_path = tmp_path / "benign-zeek.yaml"
+    output_root = tmp_path / "output"
+    scenario_path.write_text(
+        canonical_benign_yaml().replace(
+            "  - generic-normalized",
+            "  - generic-normalized\n  - zeek",
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "generate",
+            "--scenario",
+            str(scenario_path),
+            "--output",
+            str(output_root),
+            "--run-id",
+            "run-cli-benign-zeek",
+            "--generated-at",
+            "2026-01-15T14:00:03Z",
+        ]
+    )
+    captured = capsys.readouterr()
+    manifest = read_json(output_root / "manifest.json")
+    file_paths = [entry["path"] for entry in manifest["files"]]
+
+    assert exit_code == 0
+    assert captured.err == ""
+    assert file_paths == [
+        "logs/source-neutral-core/generic-normalized/events.jsonl",
+        "logs/zeek-sensor-01/zeek/conn.log",
+        "logs/zeek-sensor-01/zeek/dns.log",
+        "logs/zeek-sensor-01/zeek/http.log",
+    ]
+    assert (output_root / "logs" / "zeek-sensor-01" / "zeek" / "conn.log").exists()
+    assert manifest["files"][1]["format"] == "zeek-tsv"
+    assert manifest["files"][1]["record_count"] == 2
+
+
 def test_cli_generate_reports_validation_errors_without_tracebacks(tmp_path: Path, capsys) -> None:
     """
     Verify expected validation errors return non-zero with concise stderr.

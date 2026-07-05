@@ -302,9 +302,27 @@ python -m pytest
 flake8 --max-line-length=120 .
 ```
 
-## Decisions to Make Before Implementation
+## Resolved Phase 3 Questions
 
-| Decision | Recommended Default | Reason |
+These decisions incorporate the answered Phase 3 planning questions:
+
+1. Keep Zeek output as native TSV only for now. Do not add Zeek JSONL.
+2. Keep both Zeek version targets: core fields should stay compatible with Zeek 8.2.x and Zeek 8.0.x LTS.
+3. Allow scenarios to request both `generic-normalized` and `zeek`. This means one run can write the existing
+   source-neutral JSONL output and the new Zeek TSV files side by side.
+4. Allow Zeek-only runs. This means `output_families: [zeek]` should write only Zeek files and should not force
+   `logs/source-neutral-core/generic-normalized/events.jsonl` to exist.
+5. Do not create empty Zeek log files for streams with zero records.
+6. Derive Zeek header times from `generated_at` when it is provided.
+7. Use only `zeek-sensor-01` as the Phase 3 Zeek sensor. This keeps sensor selection scoped to `linux-mini-lab`
+   instead of adding multi-sensor routing.
+8. Reuse the same HTTP connection when multiple HTTP requests belong to the same scenario, source host, service,
+   correlation, and destination. This is what gives the canonical misuse sequence transaction depths `1` and `2`
+   on one shared Zeek connection UID.
+9. Keep shared flow facts source-neutral: authored values should win when present, and deterministic enrichment should
+   fill omissions before writers run.
+
+| Decision | Resolved Behavior | Reason |
 | --- | --- | --- |
 | Zeek format | Native TSV only | Matches Zeek defaults and avoids duplicating generic JSONL. |
 | Zeek version target | Core fields compatible with Zeek 8.2.x and 8.0.x LTS | Matches the schema notes and reduces field churn. |
