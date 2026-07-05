@@ -107,27 +107,45 @@ Acceptance criteria:
 
 ### Task 3: Add Shared Detail Overrides, Enrichment, and Zeek Value Derivation
 
+Current readiness:
+
+- Ready to start now; no additional planning decisions block Task 3.
+- Task 1 is settled: YAML can request `zeek` and still rejects unsupported source-specific families.
+- Task 2 is settled: Zeek TSV schemas, headers, and value rendering exist for `conn`, `dns`, and `http`.
+- Initial deterministic Zeek-owned values already exist in the writer path, including source ports, UIDs, byte and
+  packet estimates, DNS details, HTTP defaults, status messages, and HTTP transaction depth.
+- The remaining Task 3 gap is authored source-neutral shared-detail overrides and their validation. Authors still need
+  a supported way to provide exact low-level values such as source ports, packet or byte counts, DNS transaction
+  details, HTTP user agents, HTTP versions, and response sizes.
+
 Goal: let authors provide low-level shared details when they need exact control, fill missing shared details
 deterministically, then generate Zeek-owned values without pushing Zeek-specific fields into source-neutral events.
 
 Implement:
 
-- Optional authored shared detail fields for flow, DNS, and HTTP context. Keep these under a source-neutral namespace
+- Add optional authored shared-detail fields for flow, DNS, and HTTP context. Keep these under source-neutral namespaces
   such as `network`, `dns`, or `http`, not a Zeek namespace.
-- Precedence rules where authored shared details win and deterministic enrichment fills only omitted details.
-- Validation that authored shared details are plausible, for example source ports are in range and packet or byte
+- Define the YAML shape for those details on supported authored events. The expected first pass should cover:
+
+| Namespace | Fields |
+| --- | --- |
+| `network` | `source_port`, `orig_bytes`, `resp_bytes`, `orig_pkts`, `resp_pkts` |
+| `dns` | `trans_id`, `rtt`, `ttls`, `flags` |
+| `http` | `user_agent`, `version`, `response_body_len`, `response_content_type` |
+
+- Add source-neutral model fields to carry those shared details after YAML parsing and event expansion.
+- Add validation that authored shared details are plausible, for example source ports are in range and packet or byte
   counts are non-negative.
-- Deterministic source-neutral flow keys for DNS and HTTP flows when the author omits them.
-- Stable client source port derivation per flow, exposed through shared flow context when the author omits a port.
-- Shared byte or packet estimates where later firewall, proxy, or host generators must agree with Zeek.
-- Shared DNS response context such as transaction IDs, response intervals, answer TTLs, and flags when those values may
-  be needed by future DNS server logs.
-- Shared HTTP request context such as default user agent, HTTP version, response size, and MIME hints when those values
-  may be needed by future Apache or proxy generators.
-- Stable Zeek `uid` derivation per connection-like flow.
-- Plausible deterministic Zeek connection state and history values.
-- Zeek HTTP transaction depth calculation for multiple requests sharing one connection.
-- Status message derivation for common HTTP status codes used by canonical scenarios.
+- Apply precedence rules where authored shared details win and deterministic enrichment fills only omitted details.
+- Preserve deterministic source-neutral flow keys for DNS and HTTP flows when the author omits shared details.
+- Preserve stable client source port derivation per flow when the author omits a port.
+- Preserve shared byte or packet estimates where later firewall, proxy, or host generators must agree with Zeek.
+- Preserve shared DNS response context defaults such as transaction IDs, response intervals, answer TTLs, and flags.
+- Preserve shared HTTP request context defaults such as user agent, HTTP version, response size, and MIME hints.
+- Keep Zeek-owned values such as `uid`, connection state, history, and TSV rendering details inside
+  `log_generator.output.zeek`.
+- Keep Zeek HTTP transaction depth calculation for multiple requests sharing one connection.
+- Keep status message derivation for common HTTP status codes used by canonical scenarios.
 
 Acceptance criteria:
 
@@ -333,6 +351,17 @@ These decisions incorporate the answered Phase 3 planning questions:
 | Sensor selection | Use `zeek-sensor-01` only | Keeps Phase 3 scoped to `linux-mini-lab`. |
 | HTTP connection reuse | Reuse connection by scenario, source host, service, correlation, and destination | Supports the canonical misuse two-request sequence. |
 | Shared flow facts | Authored values win; deterministic enrichment fills omissions before writers run | Gives users exact control without sacrificing concise reproducible scenarios. |
+
+## Current Implementation Status Before Task 3
+
+The repository is ready for Task 3. The implemented baseline already covers output-family validation, Zeek TSV schema
+and rendering primitives, deterministic Zeek record derivation, Zeek file writing, manifest entries, CLI dispatch, and
+README coverage for the current Zeek workflow.
+
+Task 3 should not reopen the resolved questions above. Its focus is narrower: add source-neutral authored override
+fields and validation, then make existing deterministic enrichment use those authored values when present. Until Task 3
+is complete, generated defaults exist but authors cannot reliably override all shared flow, DNS, and HTTP details from
+YAML or Python scenario objects.
 
 ## Risks and Mitigations
 
