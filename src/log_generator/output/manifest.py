@@ -2,10 +2,14 @@
 Output manifest model and writer helpers.
 """
 
+from contextlib import contextmanager
 import json
+import shutil
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
+from uuid import uuid4
 
 from log_generator.core.scenarios import Scenario
 from log_generator.output.jsonl import safe_output_path
@@ -13,6 +17,7 @@ from log_generator.output.registry import (
     OutputOmittedStream,
     OutputWriteResult,
     OutputWrittenFile,
+    OutputWriterRun,
     plan_output_writer_runs,
     supported_output_families,
     validate_output_writer_runs,
@@ -43,9 +48,52 @@ def write_output_manifest(
     Returns:
         Path: Path to the written top-level manifest file.
     """
+    output_root = Path(output_root)
     generated_at = _normalize_generated_at(generated_at)
     writer_runs = plan_output_writer_runs(scenarios)
     validate_output_writer_runs(writer_runs)
+
+    _validate_replaceable_output_root(output_root)
+
+    with _staged_output_root(output_root) as staging_root:
+        output_result = _write_registered_outputs(staging_root, writer_runs, generated_at)
+        scenario_manifest_path = write_scenario_manifest(staging_root, scenarios)
+        ground_truth_path = write_ground_truth(staging_root, scenarios)
+        manifest_path = safe_output_path(staging_root, MANIFEST_PATH)
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+        manifest = build_manifest(
+            output_root=output_root,
+            scenarios=scenarios,
+            run_id=run_id,
+            generated_at=generated_at,
+            output_result=output_result,
+            scenario_manifest_path=scenario_manifest_path,
+            ground_truth_path=ground_truth_path,
+            artifact_root=staging_root,
+        )
+        _write_json_file(manifest_path, manifest)
+        _replace_output_root(staging_root, output_root)
+
+    return safe_output_path(output_root, MANIFEST_PATH)
+
+
+def _write_registered_outputs(
+    output_root: Path,
+    writer_runs: tuple[OutputWriterRun, ...],
+    generated_at: datetime,
+) -> OutputWriteResult:
+    """
+    Write all planned output-family artifacts and combine their metadata.
+
+    Args:
+        output_root (Path): Root output directory where generated artifacts should be written.
+        writer_runs (tuple[OutputWriterRun, ...]): Planned output writer runs.
+        generated_at (datetime): UTC generation timestamp.
+
+    Returns:
+        OutputWriteResult: Combined writer output metadata.
+    """
     output_files = []
     omitted_streams = []
 
@@ -54,23 +102,77 @@ def write_output_manifest(
         output_files.extend(result.files)
         omitted_streams.extend(result.omitted_streams)
 
-    scenario_manifest_path = write_scenario_manifest(output_root, scenarios)
-    ground_truth_path = write_ground_truth(output_root, scenarios)
-    manifest_path = safe_output_path(output_root, MANIFEST_PATH)
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    return OutputWriteResult(files=tuple(output_files), omitted_streams=tuple(omitted_streams))
 
-    manifest = build_manifest(
-        output_root=output_root,
-        scenarios=scenarios,
-        run_id=run_id,
-        generated_at=generated_at,
-        output_result=OutputWriteResult(files=tuple(output_files), omitted_streams=tuple(omitted_streams)),
-        scenario_manifest_path=scenario_manifest_path,
-        ground_truth_path=ground_truth_path,
+
+def _validate_replaceable_output_root(output_root: Path) -> None:
+    """
+    Validate that an output root can be atomically replaced.
+
+    Args:
+        output_root (Path): Requested final output directory.
+
+    Returns:
+        None: Raises ValueError when the path cannot be replaced.
+    """
+    if output_root.exists() and not output_root.is_dir():
+        raise ValueError(f"output root '{output_root}' exists and is not a directory")
+
+
+@contextmanager
+def _staged_output_root(output_root: Path) -> Iterator[Path]:
+    """
+    Create and clean up a sibling staging directory for atomic output writes.
+
+    Args:
+        output_root (Path): Requested final output directory.
+
+    Yields:
+        Path: Temporary staging output directory.
+    """
+    output_root.parent.mkdir(parents=True, exist_ok=True)
+    staging_root = Path(
+        tempfile.mkdtemp(
+            prefix=f".{output_root.name}.tmp-",
+            dir=str(output_root.parent),
+        )
     )
-    _write_json_file(manifest_path, manifest)
 
-    return manifest_path
+    try:
+        yield staging_root
+    finally:
+        # After a successful commit this path has been renamed into output_root and no longer exists.
+        if staging_root.exists():
+            shutil.rmtree(staging_root, ignore_errors=True)
+
+
+def _replace_output_root(staging_root: Path, output_root: Path) -> None:
+    """
+    Replace the final output root with a fully written staging directory.
+
+    Args:
+        staging_root (Path): Fully written staging output directory.
+        output_root (Path): Requested final output directory.
+
+    Returns:
+        None: The staging directory is moved into place.
+    """
+    backup_root = None
+
+    if output_root.exists():
+        backup_root = output_root.parent / f".{output_root.name}.backup-{uuid4().hex}"
+        output_root.rename(backup_root)
+
+    try:
+        staging_root.rename(output_root)
+    except Exception:
+        # Restore the previous completed output if committing the new tree fails after the backup move.
+        if backup_root is not None and backup_root.exists() and not output_root.exists():
+            backup_root.rename(output_root)
+        raise
+
+    if backup_root is not None and backup_root.exists():
+        shutil.rmtree(backup_root, ignore_errors=True)
 
 
 def _validate_requested_output_families(scenarios: tuple[Scenario, ...]) -> None:
@@ -149,6 +251,7 @@ def build_manifest(
     output_result: OutputWriteResult,
     scenario_manifest_path: Path,
     ground_truth_path: Optional[Path],
+    artifact_root: Optional[Path] = None,
 ) -> dict[str, object]:
     """
     Build the top-level output manifest payload.
@@ -161,13 +264,17 @@ def build_manifest(
         output_result (OutputWriteResult): Written log files and omitted streams returned by registered writers.
         scenario_manifest_path (Path): Written scenario manifest file.
         ground_truth_path (Optional[Path]): Written ground-truth file when present.
+        artifact_root (Optional[Path]): Root used to compute relative artifact paths.
 
     Returns:
         dict[str, object]: JSON-compatible manifest payload.
     """
+    if artifact_root is None:
+        artifact_root = output_root
+
     metadata_files = [
         {
-            "path": _relative_output_path(output_root, scenario_manifest_path),
+            "path": _relative_output_path(artifact_root, scenario_manifest_path),
             "format": "json",
             "record_count": len(scenarios),
         }
@@ -177,7 +284,7 @@ def build_manifest(
         # Count lines after writing so the manifest describes the exact file on disk.
         metadata_files.append(
             {
-                "path": _relative_output_path(output_root, ground_truth_path),
+                "path": _relative_output_path(artifact_root, ground_truth_path),
                 "format": "jsonl",
                 "record_count": _line_count(ground_truth_path),
             }
@@ -197,7 +304,7 @@ def build_manifest(
         },
         "scenarios": [_manifest_scenario_entry(scenario) for scenario in scenarios],
         "requested_output_families": _requested_output_families(scenarios),
-        "files": [_output_file_entry(output_root, output_file) for output_file in output_result.files],
+        "files": [_output_file_entry(artifact_root, output_file) for output_file in output_result.files],
         "metadata_files": metadata_files,
         "omitted_streams": [_omitted_stream_entry(stream) for stream in output_result.omitted_streams],
     }

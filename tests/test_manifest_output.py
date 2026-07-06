@@ -14,6 +14,8 @@ from log_generator.core.scenarios import (
     build_local_account_misuse_web_scenario,
 )
 from log_generator.output.manifest import write_output_manifest
+from log_generator.output import registry
+from log_generator.output.registry import GENERIC_NORMALIZED_OUTPUT_FAMILY, OutputWriteResult, OutputWriter
 
 
 def read_json(path: Path) -> dict:
@@ -202,6 +204,117 @@ def test_manifest_file_entries_match_files_written(tmp_path: Path) -> None:
 
     for relative_path in file_paths:
         assert (tmp_path / relative_path).exists()
+
+
+def test_successful_manifest_write_replaces_existing_output_directory(tmp_path: Path) -> None:
+    """
+    Verify successful generation replaces stale output directory contents.
+
+    Args:
+        tmp_path (Path): Pytest temporary output directory.
+
+    Returns:
+        None: This test asserts replacement behavior directly.
+    """
+    output_root = tmp_path / "output"
+    stale_path = output_root / "stale.txt"
+    output_root.mkdir()
+    stale_path.write_text("old output", encoding="utf-8")
+
+    manifest_path = write_output_manifest(
+        output_root,
+        (build_benign_internal_web_scenario(),),
+        "run-replace-existing",
+        generated_at=datetime(2026, 1, 15, 14, 0, 3, tzinfo=timezone.utc),
+    )
+
+    assert manifest_path == output_root / "manifest.json"
+    assert manifest_path.exists()
+    assert not stale_path.exists()
+    assert read_json(manifest_path)["run"]["output_root"] == str(output_root)
+
+
+def test_failed_manifest_write_leaves_existing_output_unchanged(tmp_path: Path, monkeypatch) -> None:
+    """
+    Verify writer failures do not replace an existing completed output tree.
+
+    Args:
+        tmp_path (Path): Pytest temporary output directory.
+        monkeypatch (MonkeyPatch): Pytest monkeypatch fixture.
+
+    Returns:
+        None: This test asserts failed staged writes are cleaned up.
+    """
+    output_root = tmp_path / "output"
+    manifest_path = output_root / "manifest.json"
+    marker_path = output_root / "keep.txt"
+    output_root.mkdir()
+    manifest_path.write_text('{"old": true}\n', encoding="utf-8")
+    marker_path.write_text("keep me", encoding="utf-8")
+
+    def failing_write(output_root: Path, scenarios, generated_at: datetime) -> OutputWriteResult:
+        """
+        Write a staged partial file and then fail.
+
+        Args:
+            output_root (Path): Staging output directory.
+            scenarios: Scenarios passed to the writer.
+            generated_at (datetime): Generation timestamp.
+
+        Returns:
+            OutputWriteResult: This function always raises before returning.
+        """
+        partial_path = output_root / "partial.txt"
+        partial_path.write_text("partial output", encoding="utf-8")
+        raise RuntimeError("writer failed")
+
+    monkeypatch.setitem(
+        registry.OUTPUT_WRITERS,
+        GENERIC_NORMALIZED_OUTPUT_FAMILY,
+        OutputWriter(
+            family_name=GENERIC_NORMALIZED_OUTPUT_FAMILY,
+            validate=lambda scenarios: None,
+            write=failing_write,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="writer failed"):
+        write_output_manifest(
+            output_root,
+            (build_benign_internal_web_scenario(),),
+            "run-failing-writer",
+            generated_at=datetime(2026, 1, 15, 14, 0, 3, tzinfo=timezone.utc),
+        )
+
+    assert manifest_path.read_text(encoding="utf-8") == '{"old": true}\n'
+    assert marker_path.read_text(encoding="utf-8") == "keep me"
+    assert not (output_root / "partial.txt").exists()
+    assert not list(tmp_path.glob(".output.tmp-*"))
+
+
+def test_manifest_write_rejects_output_root_file(tmp_path: Path) -> None:
+    """
+    Verify an existing file at the output root fails before writing artifacts.
+
+    Args:
+        tmp_path (Path): Pytest temporary output directory.
+
+    Returns:
+        None: This test asserts invalid output root handling directly.
+    """
+    output_root = tmp_path / "output"
+    output_root.write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exists and is not a directory"):
+        write_output_manifest(
+            output_root,
+            (build_benign_internal_web_scenario(),),
+            "run-output-file",
+            generated_at=datetime(2026, 1, 15, 14, 0, 3, tzinfo=timezone.utc),
+        )
+
+    assert output_root.read_text(encoding="utf-8") == "not a directory"
+    assert not list(tmp_path.glob(".output.tmp-*"))
 
 
 def test_manifest_includes_zeek_files_when_requested(tmp_path: Path) -> None:
