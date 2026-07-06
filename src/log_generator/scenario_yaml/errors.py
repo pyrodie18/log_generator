@@ -2,20 +2,13 @@
 Error types for YAML scenario parsing and validation.
 """
 
-from dataclasses import dataclass
-from typing import Any, Optional
+from log_generator.core.validation_errors import ValidationIssue, ValidationIssueError
 
 
-@dataclass(frozen=True)
-class ScenarioYamlValidationError:
+class ScenarioYamlValidationError(ValidationIssue):
     """
     Represent one YAML scenario validation error.
     """
-
-    scenario_id: Optional[str]
-    field_path: str
-    invalid_value: Any
-    reason: str
 
     def __str__(self) -> str:
         """
@@ -24,25 +17,10 @@ class ScenarioYamlValidationError:
         Returns:
             str: Human-readable validation error.
         """
-        prefix = self.scenario_id or "<unknown-scenario>"
-
-        return f"{prefix} {self.field_path}: {self.invalid_value!r} is invalid because {self.reason}"
+        return f"{self.message_prefix()} {self.field_path}: {self.invalid_value!r} is invalid because {self.reason}"
 
 
-class ScenarioYamlError(ValueError):
+class ScenarioYamlError(ValidationIssueError[ScenarioYamlValidationError]):
     """
     Represent one or more YAML scenario validation errors.
     """
-
-    def __init__(self, errors: list[ScenarioYamlValidationError]) -> None:
-        """
-        Initialize the exception from validation errors.
-
-        Args:
-            errors (list[ScenarioYamlValidationError]): Validation errors to expose.
-
-        Returns:
-            None: The exception is initialized.
-        """
-        self.errors = errors
-        super().__init__("\n".join(str(error) for error in errors))

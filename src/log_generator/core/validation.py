@@ -2,7 +2,6 @@
 Validation helpers for environments, scenarios, and source-neutral events.
 """
 
-from dataclasses import dataclass
 from typing import Any, Optional
 
 from log_generator.core.environment import Environment, Host, Service, User
@@ -15,18 +14,13 @@ from log_generator.core.events import (
 )
 from log_generator.core.scenarios import Scenario
 from log_generator.core.value_checks import is_http_status_code
+from log_generator.core.validation_errors import ValidationIssue, ValidationIssueError
 
 
-@dataclass(frozen=True)
-class ValidationError:
+class ValidationError(ValidationIssue):
     """
     Represent one actionable semantic validation error.
     """
-
-    scenario_id: str
-    field_path: str
-    invalid_value: Any
-    reason: str
 
     def __str__(self) -> str:
         """
@@ -41,23 +35,10 @@ class ValidationError:
         )
 
 
-class ScenarioValidationError(ValueError):
+class ScenarioValidationError(ValidationIssueError[ValidationError]):
     """
     Represent one or more semantic validation errors for a scenario.
     """
-
-    def __init__(self, errors: list[ValidationError]) -> None:
-        """
-        Initialize the exception from validation errors.
-
-        Args:
-            errors (list[ValidationError]): Validation errors to include.
-
-        Returns:
-            None: The exception is initialized.
-        """
-        self.errors = errors
-        super().__init__("\n".join(str(error) for error in errors))
 
 
 def validate_scenario(scenario: Scenario, environment: Environment) -> list[ValidationError]:
