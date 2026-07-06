@@ -8,25 +8,21 @@ from pathlib import Path
 from typing import Optional
 
 from log_generator.core.scenarios import Scenario
-from log_generator.output.jsonl import (
-    GENERIC_NORMALIZED_EVENTS_PATH,
-    iter_ordered_events,
-    safe_output_path,
-    write_generic_normalized_events,
-)
-from log_generator.output.zeek import (
-    ZeekOmittedStream,
-    ZeekWriteResult,
-    ZeekWrittenFile,
-    validate_zeek_scenarios,
-    write_zeek_logs,
+from log_generator.output.jsonl import safe_output_path
+from log_generator.output.registry import (
+    OutputOmittedStream,
+    OutputWriteResult,
+    OutputWrittenFile,
+    plan_output_writer_runs,
+    supported_output_families,
+    validate_output_writer_runs,
 )
 
 
 MANIFEST_PATH = ("manifest.json",)
 SCENARIO_MANIFEST_PATH = ("metadata", "scenario-manifest.json")
 GROUND_TRUTH_PATH = ("metadata", "ground-truth.jsonl")
-SUPPORTED_OUTPUT_FAMILIES = frozenset({"generic-normalized", "zeek"})
+SUPPORTED_OUTPUT_FAMILIES = supported_output_families()
 
 
 def write_output_manifest(
@@ -48,17 +44,16 @@ def write_output_manifest(
         Path: Path to the written top-level manifest file.
     """
     generated_at = _normalize_generated_at(generated_at)
-    _validate_requested_output_families(scenarios)
+    writer_runs = plan_output_writer_runs(scenarios)
+    validate_output_writer_runs(writer_runs)
+    output_files = []
+    omitted_streams = []
 
-    events_path = None
-    # Generic normalized output is shared across scenarios, but only scenarios requesting it are included.
-    generic_scenarios = tuple(scenario for scenario in scenarios if "generic-normalized" in scenario.output_families)
+    for writer_run in writer_runs:
+        result = writer_run.writer.write(output_root, writer_run.scenarios, generated_at)
+        output_files.extend(result.files)
+        omitted_streams.extend(result.omitted_streams)
 
-    if generic_scenarios:
-        events_path = write_generic_normalized_events(output_root, generic_scenarios)
-
-    # Zeek writer returns both written files and intentionally omitted streams for manifest transparency.
-    zeek_result = write_zeek_logs(output_root, scenarios, generated_at=generated_at)
     scenario_manifest_path = write_scenario_manifest(output_root, scenarios)
     ground_truth_path = write_ground_truth(output_root, scenarios)
     manifest_path = safe_output_path(output_root, MANIFEST_PATH)
@@ -69,9 +64,7 @@ def write_output_manifest(
         scenarios=scenarios,
         run_id=run_id,
         generated_at=generated_at,
-        events_path=events_path,
-        generic_scenarios=generic_scenarios,
-        zeek_result=zeek_result,
+        output_result=OutputWriteResult(files=tuple(output_files), omitted_streams=tuple(omitted_streams)),
         scenario_manifest_path=scenario_manifest_path,
         ground_truth_path=ground_truth_path,
     )
@@ -90,17 +83,7 @@ def _validate_requested_output_families(scenarios: tuple[Scenario, ...]) -> None
     Returns:
         None: Raises ValueError when a requested writer is unsupported.
     """
-    zeek_scenarios = []
-
-    for scenario in scenarios:
-        for output_family in scenario.output_families:
-            if output_family not in SUPPORTED_OUTPUT_FAMILIES:
-                raise ValueError(f"unsupported output family '{output_family}'")
-
-        if "zeek" in scenario.output_families:
-            zeek_scenarios.append(scenario)
-
-    validate_zeek_scenarios(tuple(zeek_scenarios))
+    validate_output_writer_runs(plan_output_writer_runs(scenarios))
 
 
 def write_scenario_manifest(output_root: Path, scenarios: tuple[Scenario, ...]) -> Path:
@@ -163,9 +146,7 @@ def build_manifest(
     scenarios: tuple[Scenario, ...],
     run_id: str,
     generated_at: datetime,
-    events_path: Optional[Path],
-    generic_scenarios: tuple[Scenario, ...],
-    zeek_result: ZeekWriteResult,
+    output_result: OutputWriteResult,
     scenario_manifest_path: Path,
     ground_truth_path: Optional[Path],
 ) -> dict[str, object]:
@@ -177,9 +158,7 @@ def build_manifest(
         scenarios (tuple[Scenario, ...]): Scenarios included in the output set.
         run_id (str): Stable run identifier.
         generated_at (datetime): UTC generation timestamp.
-        events_path (Optional[Path]): Written generic normalized event file when requested.
-        generic_scenarios (tuple[Scenario, ...]): Scenarios included in the generic normalized event file.
-        zeek_result (ZeekWriteResult): Written Zeek output metadata.
+        output_result (OutputWriteResult): Written log files and omitted streams returned by registered writers.
         scenario_manifest_path (Path): Written scenario manifest file.
         ground_truth_path (Optional[Path]): Written ground-truth file when present.
 
@@ -204,14 +183,6 @@ def build_manifest(
             }
         )
 
-    files = []
-
-    if events_path is not None:
-        files.append(_generic_events_file_entry(output_root, events_path, generic_scenarios))
-
-    # Source-specific writers decide which streams are present; the manifest only records their results.
-    files.extend(_zeek_file_entry(output_root, zeek_file) for zeek_file in zeek_result.files)
-
     return {
         "schema_version": "output-manifest/v0.1",
         "generated_at": _format_timestamp(generated_at),
@@ -226,75 +197,43 @@ def build_manifest(
         },
         "scenarios": [_manifest_scenario_entry(scenario) for scenario in scenarios],
         "requested_output_families": _requested_output_families(scenarios),
-        "files": files,
+        "files": [_output_file_entry(output_root, output_file) for output_file in output_result.files],
         "metadata_files": metadata_files,
-        "omitted_streams": [_omitted_stream_entry(stream) for stream in zeek_result.omitted_streams],
+        "omitted_streams": [_omitted_stream_entry(stream) for stream in output_result.omitted_streams],
     }
 
 
-def _generic_events_file_entry(
-    output_root: Path,
-    events_path: Path,
-    scenarios: tuple[Scenario, ...],
-) -> dict[str, object]:
+def _output_file_entry(output_root: Path, output_file: OutputWrittenFile) -> dict[str, object]:
     """
-    Build the manifest file entry for generic normalized events.
+    Build a manifest file entry for a writer output file.
 
     Args:
         output_root (Path): Root output directory.
-        events_path (Path): Written generic normalized event file.
-        scenarios (tuple[Scenario, ...]): Scenarios included in the file.
-
-    Returns:
-        dict[str, object]: JSON-compatible file entry.
-    """
-    events = iter_ordered_events(scenarios)
-
-    return {
-        "path": _relative_output_path(output_root, events_path),
-        "source_id": "source-neutral-core",
-        "source_kind": "logical",
-        "log_family": "generic-normalized",
-        "log_stream": GENERIC_NORMALIZED_EVENTS_PATH[-1],
-        "format": "jsonl",
-        "record_count": _line_count(events_path),
-        "timestamp_fields": ["timestamp"],
-        "scenario_ids": _scenario_ids(scenarios),
-        "event_types": _event_types(events),
-    }
-
-
-def _zeek_file_entry(output_root: Path, zeek_file: ZeekWrittenFile) -> dict[str, object]:
-    """
-    Build a manifest file entry for a written Zeek stream.
-
-    Args:
-        output_root (Path): Root output directory.
-        zeek_file (ZeekWrittenFile): Zeek file metadata returned by the Zeek writer.
+        output_file (OutputWrittenFile): Writer output file metadata.
 
     Returns:
         dict[str, object]: JSON-compatible file entry.
     """
     return {
-        "path": _relative_output_path(output_root, zeek_file.path),
-        "source_id": "zeek-sensor-01",
-        "source_kind": "sensor",
-        "log_family": "zeek",
-        "log_stream": zeek_file.path.name,
-        "format": "zeek-tsv",
-        "record_count": zeek_file.record_count,
-        "timestamp_fields": ["ts"],
-        "scenario_ids": list(zeek_file.scenario_ids),
-        "event_types": list(zeek_file.event_types),
+        "path": _relative_output_path(output_root, output_file.path),
+        "source_id": output_file.source_id,
+        "source_kind": output_file.source_kind,
+        "log_family": output_file.log_family,
+        "log_stream": output_file.log_stream,
+        "format": output_file.format,
+        "record_count": output_file.record_count,
+        "timestamp_fields": list(output_file.timestamp_fields),
+        "scenario_ids": list(output_file.scenario_ids),
+        "event_types": list(output_file.event_types),
     }
 
 
-def _omitted_stream_entry(omitted_stream: ZeekOmittedStream) -> dict[str, object]:
+def _omitted_stream_entry(omitted_stream: OutputOmittedStream) -> dict[str, object]:
     """
     Build a manifest entry for a requested stream omitted because it had no records.
 
     Args:
-        omitted_stream (ZeekOmittedStream): Omitted stream metadata returned by the Zeek writer.
+        omitted_stream (OutputOmittedStream): Omitted stream metadata returned by an output writer.
 
     Returns:
         dict[str, object]: JSON-compatible omitted-stream entry.
@@ -397,45 +336,6 @@ def _requested_output_families(scenarios: tuple[Scenario, ...]) -> list[str]:
         output_families.update(scenario.output_families)
 
     return sorted(output_families)
-
-
-def _scenario_ids(scenarios: tuple[Scenario, ...]) -> list[str]:
-    """
-    Return scenario IDs in caller-provided order without duplicates.
-
-    Args:
-        scenarios (tuple[Scenario, ...]): Scenarios to inspect.
-
-    Returns:
-        list[str]: Scenario identifiers.
-    """
-    scenario_ids = []
-
-    for scenario in scenarios:
-        if scenario.id not in scenario_ids:
-            scenario_ids.append(scenario.id)
-
-    return scenario_ids
-
-
-def _event_types(events: tuple[object, ...]) -> list[str]:
-    """
-    Return event types in first-seen order.
-
-    Args:
-        events (tuple[object, ...]): Events to inspect.
-
-    Returns:
-        list[str]: Event type names.
-    """
-    event_types = []
-
-    for event in events:
-        event_type = getattr(event, "event_type")
-        if event_type not in event_types:
-            event_types.append(event_type)
-
-    return event_types
 
 
 def _run_seed(scenarios: tuple[Scenario, ...]) -> int:

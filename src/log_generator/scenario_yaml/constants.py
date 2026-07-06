@@ -4,13 +4,17 @@ Constants for YAML scenario parsing and validation.
 
 import re
 
-from log_generator.output.jsonl import SOURCE_SPECIFIC_OUTPUT_FAMILIES
+from log_generator.output.registry import (
+    DEFAULT_OUTPUT_FAMILIES as REGISTRY_DEFAULT_OUTPUT_FAMILIES,
+    supported_output_families,
+    unsupported_source_specific_output_families,
+)
 
 
 SUPPORTED_SCHEMA_VERSION = "scenario/v0.1"
-DEFAULT_OUTPUT_FAMILIES = ("generic-normalized",)
-SUPPORTED_OUTPUT_FAMILIES = frozenset((*DEFAULT_OUTPUT_FAMILIES, "zeek"))
-UNSUPPORTED_SOURCE_SPECIFIC_OUTPUT_FAMILIES = SOURCE_SPECIFIC_OUTPUT_FAMILIES - SUPPORTED_OUTPUT_FAMILIES
+DEFAULT_OUTPUT_FAMILIES = REGISTRY_DEFAULT_OUTPUT_FAMILIES
+SUPPORTED_OUTPUT_FAMILIES = supported_output_families()
+UNSUPPORTED_SOURCE_SPECIFIC_OUTPUT_FAMILIES = unsupported_source_specific_output_families()
 TOP_LEVEL_FIELDS = frozenset(
     {
         "schema_version",
