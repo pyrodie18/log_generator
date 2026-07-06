@@ -3,7 +3,6 @@ YAML scenario loading, validation, and generation interface.
 """
 
 from log_generator.scenario_yaml.api import (
-    build_scenario_from_yaml,
     build_scenario_from_yaml_text,
     generate_from_yaml,
     load_scenario_from_yaml,
@@ -32,7 +31,6 @@ __all__ = [
     "ScenarioYamlValidationError",
     "UNSUPPORTED_SOURCE_SPECIFIC_OUTPUT_FAMILIES",
     "build_scenario_from_parsed_yaml",
-    "build_scenario_from_yaml",
     "build_scenario_from_yaml_text",
     "generate_from_yaml",
     "load_scenario_yaml",

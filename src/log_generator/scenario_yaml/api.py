@@ -33,23 +33,6 @@ def load_scenario_yaml(
     )
 
 
-def build_scenario_from_yaml(
-    path: Path,
-    environment_registry: Optional[EnvironmentRegistry] = None,
-) -> Scenario:
-    """
-    Load a YAML scenario file and convert it into an expanded source-neutral scenario.
-
-    Args:
-        path (Path): YAML scenario file to read.
-        environment_registry (Optional[EnvironmentRegistry]): Environment registry overrides.
-
-    Returns:
-        Scenario: Expanded source-neutral scenario.
-    """
-    return load_scenario_from_yaml(path, environment_registry=environment_registry)
-
-
 def load_scenario_from_yaml(
     path: Path,
     environment_registry: Optional[EnvironmentRegistry] = None,
