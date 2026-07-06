@@ -1,0 +1,23 @@
+schema_version: scenario/v0.1
+id: scenario-small-zeek-test
+name: Small Zeek Test
+seed: 3001
+environment:
+  id: linux-mini-lab
+  version: "0.1"
+time_range:
+  start: 2026-01-15T14:00:00Z
+  end: 2026-01-15T14:00:05Z
+output_families:
+  - generic-normalized
+  - zeek
+events:
+  - id: evt-small-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /
+    correlation_id: corr-small-zeek-test-001
