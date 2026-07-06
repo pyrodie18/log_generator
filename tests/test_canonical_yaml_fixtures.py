@@ -2,7 +2,6 @@
 Tests for executable canonical YAML scenario fixtures.
 """
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,37 +11,12 @@ from log_generator.core.scenarios import (
     build_local_account_misuse_web_scenario,
 )
 from log_generator.scenario_yaml import generate_from_yaml, load_scenario_from_yaml
+from support import read_json, read_jsonl
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 BENIGN_FIXTURE_PATH = REPOSITORY_ROOT / "scenarios" / "canonical" / "benign-internal-web.yaml"
 MISUSE_FIXTURE_PATH = REPOSITORY_ROOT / "scenarios" / "canonical" / "local-account-misuse-web.yaml"
-
-
-def read_json(path: Path) -> dict:
-    """
-    Read a JSON file from disk.
-
-    Args:
-        path (Path): JSON file to read.
-
-    Returns:
-        dict: Parsed JSON object.
-    """
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def read_jsonl(path: Path) -> list[dict]:
-    """
-    Read a JSON Lines file from disk.
-
-    Args:
-        path (Path): JSON Lines file to read.
-
-    Returns:
-        list[dict]: Parsed JSON records.
-    """
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
 def serialize_ordered_events(scenario: Scenario) -> list[dict]:

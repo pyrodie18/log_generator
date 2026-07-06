@@ -2,7 +2,6 @@
 Tests for generic normalized JSON Lines output.
 """
 
-import json
 from pathlib import Path
 
 import pytest
@@ -17,19 +16,7 @@ from log_generator.output.jsonl import (
     validate_path_component,
     write_generic_normalized_events,
 )
-
-
-def read_jsonl_records(path: Path) -> list[dict]:
-    """
-    Read JSON Lines records from a file.
-
-    Args:
-        path (Path): JSON Lines file to read.
-
-    Returns:
-        list[dict]: Parsed JSON object records.
-    """
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+from support import read_jsonl
 
 
 def test_benign_generic_jsonl_writes_three_source_neutral_records(tmp_path: Path) -> None:
@@ -45,7 +32,7 @@ def test_benign_generic_jsonl_writes_three_source_neutral_records(tmp_path: Path
     scenario = build_benign_internal_web_scenario()
 
     events_path = write_generic_normalized_events(tmp_path, (scenario,))
-    records = read_jsonl_records(events_path)
+    records = read_jsonl(events_path)
 
     assert events_path == tmp_path.joinpath(*GENERIC_NORMALIZED_EVENTS_PATH)
     assert len(records) == 3
@@ -73,7 +60,7 @@ def test_misuse_generic_jsonl_writes_five_records_with_download_metadata(tmp_pat
     scenario = build_local_account_misuse_web_scenario()
 
     events_path = write_generic_normalized_events(tmp_path, (scenario,))
-    records = read_jsonl_records(events_path)
+    records = read_jsonl(events_path)
     download_record = records[-1]
 
     assert len(records) == 5
@@ -105,7 +92,7 @@ def test_generic_jsonl_records_omit_generator_owned_source_fields(tmp_path: Path
     """
     scenario = build_local_account_misuse_web_scenario()
 
-    records = read_jsonl_records(write_generic_normalized_events(tmp_path, (scenario,)))
+    records = read_jsonl(write_generic_normalized_events(tmp_path, (scenario,)))
     forbidden_fields = {
         "apache_bytes_sent",
         "auditd_serial",
@@ -131,7 +118,7 @@ def test_generic_jsonl_writer_sorts_multiple_scenarios_by_timestamp(tmp_path: Pa
     benign_scenario = build_benign_internal_web_scenario()
     misuse_scenario = build_local_account_misuse_web_scenario()
 
-    records = read_jsonl_records(write_generic_normalized_events(tmp_path, (benign_scenario, misuse_scenario)))
+    records = read_jsonl(write_generic_normalized_events(tmp_path, (benign_scenario, misuse_scenario)))
 
     assert [record["event_id"] for record in records[:5]] == [
         "evt-misuse-web-001",

@@ -2,7 +2,6 @@
 Tests for output manifest and metadata writers.
 """
 
-import json
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,45 +15,7 @@ from log_generator.core.scenarios import (
 from log_generator.output.manifest import write_ground_truth, write_output_manifest
 from log_generator.output import registry
 from log_generator.output.registry import GENERIC_NORMALIZED_OUTPUT_FAMILY, OutputWriteResult, OutputWriter
-
-
-def read_json(path: Path) -> dict:
-    """
-    Read a JSON file.
-
-    Args:
-        path (Path): JSON file to read.
-
-    Returns:
-        dict: Parsed JSON object.
-    """
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def read_jsonl(path: Path) -> list[dict]:
-    """
-    Read a JSON Lines file.
-
-    Args:
-        path (Path): JSON Lines file to read.
-
-    Returns:
-        list[dict]: Parsed JSON records.
-    """
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-
-
-def count_zeek_data_rows(path: Path) -> int:
-    """
-    Count non-header rows in a Zeek TSV file.
-
-    Args:
-        path (Path): Zeek TSV file to inspect.
-
-    Returns:
-        int: Number of rendered Zeek records, excluding header and close lines.
-    """
-    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if not line.startswith("#"))
+from support import count_zeek_data_rows, read_json, read_jsonl
 
 
 def test_benign_manifest_omits_ground_truth_and_matches_written_files(tmp_path: Path) -> None:

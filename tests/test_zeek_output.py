@@ -35,32 +35,7 @@ from log_generator.output.zeek import (
     zeek_schema_field_names,
     zeek_schema_field_types,
 )
-
-
-def read_zeek_records(path: Path) -> list[dict[str, str]]:
-    """
-    Read Zeek TSV data rows into dictionaries keyed by the #fields header.
-
-    Args:
-        path (Path): Zeek TSV log file to read.
-
-    Returns:
-        list[dict[str, str]]: Parsed data records.
-    """
-    fields = []
-    records = []
-
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.startswith("#fields\t"):
-            fields = line.split("\t")[1:]
-            continue
-
-        if line.startswith("#"):
-            continue
-
-        records.append(dict(zip(fields, line.split("\t"))))
-
-    return records
+from support import read_zeek_records
 
 
 def test_zeek_conn_schema_matches_minimum_field_target() -> None:

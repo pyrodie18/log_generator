@@ -2,7 +2,6 @@
 End-to-end regression tests for the Phase 1 canonical scenarios.
 """
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,32 +12,7 @@ from log_generator.core.scenarios import (
     build_local_account_misuse_web_scenario,
 )
 from log_generator.output.manifest import write_output_manifest
-
-
-def read_json(path: Path) -> dict:
-    """
-    Read a JSON file.
-
-    Args:
-        path (Path): JSON file to read.
-
-    Returns:
-        dict: Parsed JSON object.
-    """
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def read_jsonl(path: Path) -> list[dict]:
-    """
-    Read a JSON Lines file.
-
-    Args:
-        path (Path): JSON Lines file to read.
-
-    Returns:
-        list[dict]: Parsed JSON records.
-    """
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+from support import read_json, read_jsonl
 
 
 def assert_parent_links_are_earlier(scenario: Scenario) -> None:
