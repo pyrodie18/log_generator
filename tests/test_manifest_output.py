@@ -13,7 +13,7 @@ from log_generator.core.scenarios import (
     build_benign_internal_web_scenario,
     build_local_account_misuse_web_scenario,
 )
-from log_generator.output.manifest import write_output_manifest
+from log_generator.output.manifest import write_ground_truth, write_output_manifest
 from log_generator.output import registry
 from log_generator.output.registry import GENERIC_NORMALIZED_OUTPUT_FAMILY, OutputWriteResult, OutputWriter
 
@@ -143,6 +143,26 @@ def test_misuse_manifest_includes_ground_truth_record(tmp_path: Path) -> None:
             "description": "Suspicious local account use followed by admin page access and archive download.",
         }
     ]
+
+
+def test_ground_truth_writer_returns_written_record_count(tmp_path: Path) -> None:
+    """
+    Verify ground-truth metadata includes the known record count without requiring a later file read.
+
+    Args:
+        tmp_path (Path): Pytest temporary output directory.
+
+    Returns:
+        None: This test asserts the ground-truth writer return contract directly.
+    """
+    scenario = build_local_account_misuse_web_scenario()
+
+    result = write_ground_truth(tmp_path, (scenario,))
+
+    assert result is not None
+    assert result.path == tmp_path / "metadata" / "ground-truth.jsonl"
+    assert result.record_count == 1
+    assert len(read_jsonl(result.path)) == result.record_count
 
 
 def test_scenario_manifest_describes_expansion_without_event_duplication(tmp_path: Path) -> None:

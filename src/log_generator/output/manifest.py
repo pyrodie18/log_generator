@@ -3,6 +3,7 @@ Output manifest model and writer helpers.
 """
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 import json
 import shutil
 import tempfile
@@ -28,6 +29,16 @@ MANIFEST_PATH = ("manifest.json",)
 SCENARIO_MANIFEST_PATH = ("metadata", "scenario-manifest.json")
 GROUND_TRUTH_PATH = ("metadata", "ground-truth.jsonl")
 SUPPORTED_OUTPUT_FAMILIES = supported_output_families()
+
+
+@dataclass(frozen=True)
+class GroundTruthWriteResult:
+    """
+    Describe a written ground-truth metadata file.
+    """
+
+    path: Path
+    record_count: int
 
 
 def write_output_manifest(
@@ -58,7 +69,7 @@ def write_output_manifest(
     with _staged_output_root(output_root) as staging_root:
         output_result = _write_registered_outputs(staging_root, writer_runs, generated_at)
         scenario_manifest_path = write_scenario_manifest(staging_root, scenarios)
-        ground_truth_path = write_ground_truth(staging_root, scenarios)
+        ground_truth_result = write_ground_truth(staging_root, scenarios)
         manifest_path = safe_output_path(staging_root, MANIFEST_PATH)
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -69,7 +80,7 @@ def write_output_manifest(
             generated_at=generated_at,
             output_result=output_result,
             scenario_manifest_path=scenario_manifest_path,
-            ground_truth_path=ground_truth_path,
+            ground_truth_result=ground_truth_result,
             artifact_root=staging_root,
         )
         _write_json_file(manifest_path, manifest)
@@ -212,7 +223,7 @@ def write_scenario_manifest(output_root: Path, scenarios: tuple[Scenario, ...]) 
     return scenario_manifest_path
 
 
-def write_ground_truth(output_root: Path, scenarios: tuple[Scenario, ...]) -> Optional[Path]:
+def write_ground_truth(output_root: Path, scenarios: tuple[Scenario, ...]) -> Optional[GroundTruthWriteResult]:
     """
     Write ground-truth JSON Lines metadata when answer-key records exist.
 
@@ -221,7 +232,7 @@ def write_ground_truth(output_root: Path, scenarios: tuple[Scenario, ...]) -> Op
         scenarios (tuple[Scenario, ...]): Scenarios whose answer-key records should be written.
 
     Returns:
-        Optional[Path]: Path to the written ground-truth file, or None when no records exist.
+        Optional[GroundTruthWriteResult]: Written ground-truth metadata, or None when no records exist.
     """
     answer_key_records = []
 
@@ -240,7 +251,7 @@ def write_ground_truth(output_root: Path, scenarios: tuple[Scenario, ...]) -> Op
             output_file.write(json.dumps(record, sort_keys=True, separators=(",", ":")))
             output_file.write("\n")
 
-    return ground_truth_path
+    return GroundTruthWriteResult(path=ground_truth_path, record_count=len(answer_key_records))
 
 
 def build_manifest(
@@ -250,7 +261,7 @@ def build_manifest(
     generated_at: datetime,
     output_result: OutputWriteResult,
     scenario_manifest_path: Path,
-    ground_truth_path: Optional[Path],
+    ground_truth_result: Optional[GroundTruthWriteResult],
     artifact_root: Optional[Path] = None,
 ) -> dict[str, object]:
     """
@@ -263,7 +274,7 @@ def build_manifest(
         generated_at (datetime): UTC generation timestamp.
         output_result (OutputWriteResult): Written log files and omitted streams returned by registered writers.
         scenario_manifest_path (Path): Written scenario manifest file.
-        ground_truth_path (Optional[Path]): Written ground-truth file when present.
+        ground_truth_result (Optional[GroundTruthWriteResult]): Written ground-truth metadata when present.
         artifact_root (Optional[Path]): Root used to compute relative artifact paths.
 
     Returns:
@@ -280,13 +291,13 @@ def build_manifest(
         }
     ]
 
-    if ground_truth_path is not None:
-        # Count lines after writing so the manifest describes the exact file on disk.
+    if ground_truth_result is not None:
+        # Reuse the writer's record count so manifest construction does not reread the file it just wrote.
         metadata_files.append(
             {
-                "path": _relative_output_path(artifact_root, ground_truth_path),
+                "path": _relative_output_path(artifact_root, ground_truth_result.path),
                 "format": "jsonl",
-                "record_count": _line_count(ground_truth_path),
+                "record_count": ground_truth_result.record_count,
             }
         )
 
@@ -461,20 +472,6 @@ def _run_seed(scenarios: tuple[Scenario, ...]) -> int:
     return sum(scenario.seed for scenario in scenarios)
 
 
-def _line_count(path: Path) -> int:
-    """
-    Count lines in a text file.
-
-    Args:
-        path (Path): File to inspect.
-
-    Returns:
-        int: Number of lines in the file.
-    """
-    with path.open("r", encoding="utf-8") as input_file:
-        return sum(1 for _ in input_file)
-
-
 def _relative_output_path(output_root: Path, path: Path) -> str:
     """
     Return a portable path relative to the output root.
@@ -536,6 +533,7 @@ def _format_timestamp(timestamp: datetime) -> str:
 
 
 __all__ = [
+    "GroundTruthWriteResult",
     "GROUND_TRUTH_PATH",
     "MANIFEST_PATH",
     "SCENARIO_MANIFEST_PATH",
