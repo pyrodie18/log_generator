@@ -21,16 +21,14 @@ from log_generator.scenario_yaml.common import (
     _validate_unknown_fields,
 )
 from log_generator.scenario_yaml.constants import (
-    COMMON_EVENT_FIELDS,
     DEFAULT_OUTPUT_FAMILIES,
     DURATION_RE,
-    EVENT_TYPE_FIELDS,
-    SUPPORTED_EVENT_TYPES,
     SUPPORTED_OUTPUT_FAMILIES,
     SUPPORTED_SCHEMA_VERSION,
     TOP_LEVEL_FIELDS,
     UNSUPPORTED_SOURCE_SPECIFIC_OUTPUT_FAMILIES,
 )
+from log_generator.scenario_yaml.event_types import get_event_type
 from log_generator.scenario_yaml.errors import ScenarioYamlError, ScenarioYamlValidationError
 from log_generator.scenario_yaml.models import EnvironmentRegistry, ParsedScenarioYaml, ParsedYamlEvent
 from log_generator.scenario_yaml.validators import _validate_parsed_scenario_environment
@@ -380,11 +378,13 @@ def _parse_events(
 
         if event_type is not None:
             _validate_event_type_fields(event_document, event_type, field_path, scenario_id, errors)
+            authored_event_type = get_event_type(event_type)
 
-            if event_type not in SUPPORTED_EVENT_TYPES:
+            if authored_event_type is None:
                 errors.append(_error(scenario_id, f"{field_path}.type", event_type, "unsupported event type"))
-            elif event_type == "linux_local_login":
-                _validate_optional_ip_address_field(event_document, "source_ip", field_path, scenario_id, errors)
+            else:
+                for field_name in authored_event_type.optional_ip_fields:
+                    _validate_optional_ip_address_field(event_document, field_name, field_path, scenario_id, errors)
 
         _validate_common_event_fields(event_document, field_path, scenario_id, errors)
         timestamp, after, delay = _parse_event_timing(
@@ -681,11 +681,12 @@ def _validate_event_type_fields(
     Returns:
         None: The errors list is updated in place.
     """
-    if event_type not in SUPPORTED_EVENT_TYPES:
+    authored_event_type = get_event_type(event_type)
+
+    if authored_event_type is None:
         return
 
-    allowed_fields = COMMON_EVENT_FIELDS | EVENT_TYPE_FIELDS[event_type]
-    _validate_unknown_fields(event_document, allowed_fields, field_path, scenario_id, errors)
+    _validate_unknown_fields(event_document, authored_event_type.allowed_fields(), field_path, scenario_id, errors)
 
 
 def _validate_optional_ip_address_field(

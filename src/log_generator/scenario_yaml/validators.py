@@ -3,7 +3,8 @@ Validation helpers for parsed YAML scenarios.
 """
 
 from datetime import timedelta
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Optional
 
 from log_generator.core.environment import Environment
 from log_generator.core.scenarios import ScenarioEvent
@@ -22,7 +23,28 @@ from log_generator.scenario_yaml.contexts import (
     _optional_network_context,
 )
 from log_generator.scenario_yaml.errors import ScenarioYamlValidationError
+from log_generator.scenario_yaml.event_types import (
+    LINUX_LOCAL_LOGIN_EVENT_TYPE,
+    WEB_REQUEST_EVENT_TYPE,
+    uses_web_login_helper_offsets,
+)
 from log_generator.scenario_yaml.models import EnvironmentRegistry, ParsedScenarioYaml, ParsedYamlEvent
+
+
+@dataclass(frozen=True)
+class EnvironmentValidationContext:
+    """
+    Carry shared inputs for environment-aware event validation.
+    """
+
+    parsed: ParsedScenarioYaml
+    parsed_event: ParsedYamlEvent
+    environment: Environment
+    event_types_by_id: dict[str, str]
+    errors: list[ScenarioYamlValidationError]
+
+
+EventEnvironmentValidator = Callable[[EnvironmentValidationContext], None]
 
 
 def _validate_metadata_references(
@@ -307,35 +329,49 @@ def _validate_parsed_scenario_environment(
     for parsed_event in parsed.events:
         # Attack metadata is type-independent, then each event type gets environment-specific checks.
         _validate_attack_metadata(parsed.scenario_id, parsed_event, errors)
-
-        if parsed_event.event_type == "web_request":
-            _validate_yaml_web_request(parsed, parsed_event, environment, event_types_by_id, errors)
-        elif parsed_event.event_type == "linux_local_login":
-            _validate_yaml_linux_local_login(parsed.scenario_id, parsed_event, environment, errors)
+        _validate_event_environment(
+            EnvironmentValidationContext(
+                parsed=parsed,
+                parsed_event=parsed_event,
+                environment=environment,
+                event_types_by_id=event_types_by_id,
+                errors=errors,
+            )
+        )
 
     return errors
 
 
-def _validate_yaml_web_request(
-    parsed: ParsedScenarioYaml,
-    parsed_event: ParsedYamlEvent,
-    environment: Environment,
-    event_types_by_id: dict[str, str],
-    errors: list[ScenarioYamlValidationError],
-) -> None:
+def _validate_event_environment(context: EnvironmentValidationContext) -> None:
+    """
+    Dispatch one parsed event to its registered environment-aware validator.
+
+    Args:
+        context (EnvironmentValidationContext): Shared environment validation inputs.
+
+    Returns:
+        None: The context error list is updated in place.
+    """
+    validator = EVENT_ENVIRONMENT_VALIDATORS.get(context.parsed_event.event_type)
+
+    if validator is not None:
+        validator(context)
+
+
+def _validate_yaml_web_request(context: EnvironmentValidationContext) -> None:
     """
     Validate one parsed YAML web request against the environment.
 
     Args:
-        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
-        parsed_event (ParsedYamlEvent): Parsed YAML web request event.
-        environment (Environment): Environment used for reference lookups.
-        event_types_by_id (dict[str, str]): Authored event types by event ID.
-        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+        context (EnvironmentValidationContext): Shared environment validation inputs.
 
     Returns:
         None: The errors list is updated in place.
     """
+    parsed = context.parsed
+    parsed_event = context.parsed_event
+    environment = context.environment
+    errors = context.errors
     raw_event = parsed_event.raw
     actor_user_id = _string_event_value(raw_event, "actor")
     source_host_id = _string_event_value(raw_event, "source_host")
@@ -401,27 +437,23 @@ def _validate_yaml_web_request(
                 )
             )
 
-    _validate_generated_helper_timestamps(parsed, parsed_event, event_types_by_id, errors)
+    _validate_generated_helper_timestamps(parsed, parsed_event, context.event_types_by_id, errors)
 
 
-def _validate_yaml_linux_local_login(
-    scenario_id: str,
-    parsed_event: ParsedYamlEvent,
-    environment: Environment,
-    errors: list[ScenarioYamlValidationError],
-) -> None:
+def _validate_yaml_linux_local_login(context: EnvironmentValidationContext) -> None:
     """
     Validate one parsed YAML Linux local login against the environment.
 
     Args:
-        scenario_id (str): Scenario ID for validation errors.
-        parsed_event (ParsedYamlEvent): Parsed YAML login event.
-        environment (Environment): Environment used for reference lookups.
-        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+        context (EnvironmentValidationContext): Shared environment validation inputs.
 
     Returns:
         None: The errors list is updated in place.
     """
+    scenario_id = context.parsed.scenario_id
+    parsed_event = context.parsed_event
+    environment = context.environment
+    errors = context.errors
     raw_event = parsed_event.raw
     actor_user_id = _string_event_value(raw_event, "actor")
     target_host_id = _string_event_value(raw_event, "target_host")
@@ -446,6 +478,12 @@ def _validate_yaml_linux_local_login(
             )
 
 
+EVENT_ENVIRONMENT_VALIDATORS: dict[str, EventEnvironmentValidator] = {
+    WEB_REQUEST_EVENT_TYPE: _validate_yaml_web_request,
+    LINUX_LOCAL_LOGIN_EVENT_TYPE: _validate_yaml_linux_local_login,
+}
+
+
 def _validate_generated_helper_timestamps(
     parsed: ParsedScenarioYaml,
     parsed_event: ParsedYamlEvent,
@@ -467,7 +505,9 @@ def _validate_generated_helper_timestamps(
     dns_helper_offset = timedelta(seconds=2)
     connection_helper_offset = timedelta(seconds=1)
 
-    if parsed_event.after is not None and event_types_by_id.get(parsed_event.after) == "linux_local_login":
+    parent_event_type = event_types_by_id.get(parsed_event.after)
+
+    if uses_web_login_helper_offsets(parent_event_type):
         dns_helper_offset = timedelta(seconds=3)
         connection_helper_offset = timedelta(seconds=2)
 

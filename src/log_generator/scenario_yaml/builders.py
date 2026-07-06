@@ -3,8 +3,9 @@ Build source-neutral scenario models from parsed YAML scenarios.
 """
 
 import re
+from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from log_generator.core.events import LinuxLocalLoginEvent
 from log_generator.core.scenarios import (
@@ -28,9 +29,32 @@ from log_generator.scenario_yaml.contexts import (
     _optional_http_context,
     _optional_network_context,
 )
+from log_generator.scenario_yaml.event_types import (
+    LINUX_LOCAL_LOGIN_EVENT_TYPE,
+    WEB_REQUEST_EVENT_TYPE,
+    uses_web_login_helper_offsets,
+)
 from log_generator.scenario_yaml.errors import ScenarioYamlError, ScenarioYamlValidationError
 from log_generator.scenario_yaml.models import EnvironmentRegistry, ParsedScenarioYaml, ParsedYamlEvent
 from log_generator.scenario_yaml.validators import _validate_metadata_references
+
+
+@dataclass(frozen=True)
+class AuthoredEventBuildContext:
+    """
+    Carry shared inputs for building one parsed YAML event.
+    """
+
+    parsed: ParsedScenarioYaml
+    parsed_event: ParsedYamlEvent
+    correlation_id: str
+    parent_event_id: Optional[str]
+    event_types_by_id: dict[str, str]
+    all_authored_event_ids: set[str]
+    errors: list[ScenarioYamlValidationError]
+
+
+AuthoredEventBuilder = Callable[[AuthoredEventBuildContext], Optional[AuthoredEvent]]
 
 
 def build_scenario_from_parsed_yaml(
@@ -102,36 +126,17 @@ def _build_authored_events(parsed: ParsedScenarioYaml) -> tuple[AuthoredEvent, .
     for parsed_event in parsed.events:
         # Correlation IDs can be explicit, inherited from a parent, or deterministically generated.
         correlation_id = _event_correlation_id(parsed, parsed_event, correlation_ids_by_event_id)
-        parent_event_id = parsed_event.after
-
-        if parsed_event.event_type == "web_request":
-            authored_event = _build_authored_web_request(
+        authored_event = _build_authored_event(
+            AuthoredEventBuildContext(
                 parsed=parsed,
                 parsed_event=parsed_event,
                 correlation_id=correlation_id,
-                parent_event_id=parent_event_id,
+                parent_event_id=parsed_event.after,
                 event_types_by_id=event_types_by_id,
                 all_authored_event_ids=all_authored_event_ids,
                 errors=errors,
             )
-        elif parsed_event.event_type == "linux_local_login":
-            authored_event = _build_linux_local_login_event(
-                parsed=parsed,
-                parsed_event=parsed_event,
-                correlation_id=correlation_id,
-                parent_event_id=parent_event_id,
-                errors=errors,
-            )
-        else:
-            errors.append(
-                _error(
-                    parsed.scenario_id,
-                    _event_field_path(parsed_event, "type"),
-                    parsed_event.event_type,
-                    "unsupported event type",
-                )
-            )
-            continue
+        )
 
         if authored_event is not None:
             authored_events.append(authored_event)
@@ -142,6 +147,32 @@ def _build_authored_events(parsed: ParsedScenarioYaml) -> tuple[AuthoredEvent, .
         raise ScenarioYamlError(errors)
 
     return tuple(authored_events)
+
+
+def _build_authored_event(context: AuthoredEventBuildContext) -> Optional[AuthoredEvent]:
+    """
+    Dispatch one parsed YAML event to its registered authored-event builder.
+
+    Args:
+        context (AuthoredEventBuildContext): Shared event-building inputs.
+
+    Returns:
+        Optional[AuthoredEvent]: Built authored event when valid.
+    """
+    builder = AUTHORED_EVENT_BUILDERS.get(context.parsed_event.event_type)
+
+    if builder is None:
+        context.errors.append(
+            _error(
+                context.parsed.scenario_id,
+                _event_field_path(context.parsed_event, "type"),
+                context.parsed_event.event_type,
+                "unsupported event type",
+            )
+        )
+        return None
+
+    return builder(context)
 
 
 def _build_answer_key_records(
@@ -179,30 +210,19 @@ def _build_answer_key_records(
     return tuple(answer_key_records)
 
 
-def _build_authored_web_request(
-    parsed: ParsedScenarioYaml,
-    parsed_event: ParsedYamlEvent,
-    correlation_id: str,
-    parent_event_id: Optional[str],
-    event_types_by_id: dict[str, str],
-    all_authored_event_ids: set[str],
-    errors: list[ScenarioYamlValidationError],
-) -> Optional[AuthoredWebRequest]:
+def _build_authored_web_request(context: AuthoredEventBuildContext) -> Optional[AuthoredWebRequest]:
     """
     Convert one parsed YAML web request into an AuthoredWebRequest.
 
     Args:
-        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
-        parsed_event (ParsedYamlEvent): Parsed YAML web request event.
-        correlation_id (str): Correlation ID resolved for the event.
-        parent_event_id (Optional[str]): Parent event ID inferred from `after`.
-        event_types_by_id (dict[str, str]): Authored event types by event ID.
-        all_authored_event_ids (set[str]): Authored event IDs used to avoid helper ID collisions.
-        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+        context (AuthoredEventBuildContext): Shared event-building inputs.
 
     Returns:
         Optional[AuthoredWebRequest]: Authored web request when required fields are valid.
     """
+    parsed = context.parsed
+    parsed_event = context.parsed_event
+    errors = context.errors
     raw_event = parsed_event.raw
     actor_user_id = _required_event_string(parsed, parsed_event, "actor", errors)
     source_host_id = _required_event_string(parsed, parsed_event, "source_host", errors)
@@ -224,7 +244,9 @@ def _build_authored_web_request(
     connection_helper_offset = timedelta(seconds=1)
 
     # Login-driven web activity reserves a little extra time for generated DNS and connection helpers.
-    if parent_event_id is not None and event_types_by_id.get(parent_event_id) == "linux_local_login":
+    parent_event_type = context.event_types_by_id.get(context.parent_event_id)
+
+    if uses_web_login_helper_offsets(parent_event_type):
         dns_helper_offset = timedelta(seconds=3)
         connection_helper_offset = timedelta(seconds=2)
 
@@ -236,9 +258,9 @@ def _build_authored_web_request(
         service_id=service_id,
         method=method,
         path=path,
-        correlation_id=correlation_id,
+        correlation_id=context.correlation_id,
         status=status,
-        parent_event_id=parent_event_id,
+        parent_event_id=context.parent_event_id,
         status_code=status_code,
         attack=_optional_dict(raw_event.get("attack")),
         metadata=_optional_dict(raw_event.get("metadata")),
@@ -246,32 +268,25 @@ def _build_authored_web_request(
         network=network,
         dns=dns,
         http=http,
-        helper_event_ids=_canonical_helper_event_ids(parsed_event.event_id, all_authored_event_ids),
+        helper_event_ids=_canonical_helper_event_ids(parsed_event.event_id, context.all_authored_event_ids),
         dns_helper_offset=dns_helper_offset,
         connection_helper_offset=connection_helper_offset,
     )
 
 
-def _build_linux_local_login_event(
-    parsed: ParsedScenarioYaml,
-    parsed_event: ParsedYamlEvent,
-    correlation_id: str,
-    parent_event_id: Optional[str],
-    errors: list[ScenarioYamlValidationError],
-) -> Optional[LinuxLocalLoginEvent]:
+def _build_linux_local_login_event(context: AuthoredEventBuildContext) -> Optional[LinuxLocalLoginEvent]:
     """
     Convert one parsed YAML Linux local login into a source-neutral login event.
 
     Args:
-        parsed (ParsedScenarioYaml): Parsed YAML scenario that owns the event.
-        parsed_event (ParsedYamlEvent): Parsed YAML login event.
-        correlation_id (str): Correlation ID resolved for the event.
-        parent_event_id (Optional[str]): Parent event ID inferred from `after`.
-        errors (list[ScenarioYamlValidationError]): Validation errors to update.
+        context (AuthoredEventBuildContext): Shared event-building inputs.
 
     Returns:
         Optional[LinuxLocalLoginEvent]: Login event when required fields are valid.
     """
+    parsed = context.parsed
+    parsed_event = context.parsed_event
+    errors = context.errors
     raw_event = parsed_event.raw
     actor_user_id = _required_event_string(parsed, parsed_event, "actor", errors)
     target_host_id = _required_event_string(parsed, parsed_event, "target_host", errors)
@@ -302,8 +317,8 @@ def _build_linux_local_login_event(
         scenario_id=parsed.scenario_id,
         timestamp=parsed_event.timestamp,
         status=_event_status(raw_event),
-        correlation_id=correlation_id,
-        parent_event_id=parent_event_id,
+        correlation_id=context.correlation_id,
+        parent_event_id=context.parent_event_id,
         actor_user_id=actor_user_id,
         target_host_id=target_host_id,
         login_method=login_method,
@@ -312,6 +327,12 @@ def _build_linux_local_login_event(
         metadata=_optional_dict(raw_event.get("metadata")),
         attack=_optional_dict(raw_event.get("attack")),
     )
+
+
+AUTHORED_EVENT_BUILDERS: dict[str, AuthoredEventBuilder] = {
+    WEB_REQUEST_EVENT_TYPE: _build_authored_web_request,
+    LINUX_LOCAL_LOGIN_EVENT_TYPE: _build_linux_local_login_event,
+}
 
 
 def _event_correlation_id(
