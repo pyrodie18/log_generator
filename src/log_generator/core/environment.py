@@ -2,7 +2,7 @@
 Environment model definitions for source-neutral generation.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -176,6 +176,24 @@ class SensorVisibility:
 
 
 @dataclass(frozen=True)
+class EnvironmentIndex:
+    """
+    Store precomputed lookup indexes for an environment.
+    """
+
+    hosts: tuple[Host, ...]
+    zones_by_id: dict[str, NetworkZone]
+    hosts_by_identifier: dict[str, Host]
+    users_by_identifier: dict[str, User]
+    services_by_identifier: dict[str, Service]
+    network_devices_by_identifier: dict[str, NetworkDevice]
+    firewall_rules_by_id: dict[str, FirewallRule]
+    logging_profiles_by_id: dict[str, LoggingProfile]
+    dns_records_by_key: dict[tuple[str, str], DnsRecord]
+    http_routes_by_key: dict[tuple[str, str, str], HttpRoute]
+
+
+@dataclass(frozen=True)
 class Environment:
     """
     Represent a complete source-neutral environment template.
@@ -195,6 +213,20 @@ class Environment:
     logging_profiles: tuple[LoggingProfile, ...]
     network_devices: tuple[NetworkDevice, ...]
     sensor_visibility: tuple[SensorVisibility, ...]
+    _lookup_index: Optional[EnvironmentIndex] = field(default=None, init=False, repr=False, compare=False)
+
+    def _index(self) -> EnvironmentIndex:
+        """
+        Return the lazily built lookup index for this environment.
+
+        Returns:
+            EnvironmentIndex: Cached lookup index.
+        """
+        if self._lookup_index is None:
+            # The dataclass is frozen for public model immutability; the private cache avoids repeated scans.
+            object.__setattr__(self, "_lookup_index", build_environment_index(self))
+
+        return self._lookup_index
 
     def all_hosts(self) -> tuple[Host, ...]:
         """
@@ -203,13 +235,7 @@ class Environment:
         Returns:
             tuple[Host, ...]: Hosts defined in the environment.
         """
-        hosts = []
-
-        for zone in self.zones:
-            # Hosts are nested under zones in the template, but most validation wants a flat host view.
-            hosts.extend(zone.hosts)
-
-        return tuple(hosts)
+        return self._index().hosts
 
     def get_zone(self, identifier: str) -> Optional[NetworkZone]:
         """
@@ -221,13 +247,7 @@ class Environment:
         Returns:
             Optional[NetworkZone]: Matching zone when found; otherwise None.
         """
-        normalized_identifier = identifier.lower()
-
-        for zone in self.zones:
-            if zone.id == normalized_identifier:
-                return zone
-
-        return None
+        return self._index().zones_by_id.get(identifier.lower())
 
     def get_host(self, identifier: str) -> Optional[Host]:
         """
@@ -239,13 +259,7 @@ class Environment:
         Returns:
             Optional[Host]: Matching host when found; otherwise None.
         """
-        normalized_identifier = identifier.lower()
-
-        for host in self.all_hosts():
-            if normalized_identifier in {host.id, host.hostname, host.fqdn, host.primary_ip}:
-                return host
-
-        return None
+        return self._index().hosts_by_identifier.get(identifier.lower())
 
     def require_host(self, identifier: str) -> Host:
         """
@@ -274,13 +288,7 @@ class Environment:
         Returns:
             Optional[User]: Matching user when found; otherwise None.
         """
-        normalized_identifier = identifier.lower()
-
-        for user in self.users:
-            if normalized_identifier in {user.id, user.username}:
-                return user
-
-        return None
+        return self._index().users_by_identifier.get(identifier.lower())
 
     def require_user(self, identifier: str) -> User:
         """
@@ -309,14 +317,7 @@ class Environment:
         Returns:
             Optional[Service]: Matching service when found; otherwise None.
         """
-        normalized_identifier = identifier.lower()
-
-        for service in self.services:
-            service_names = {service.id, service.name.lower(), *service.names}
-            if normalized_identifier in service_names:
-                return service
-
-        return None
+        return self._index().services_by_identifier.get(identifier.lower())
 
     def require_service(self, identifier: str) -> Service:
         """
@@ -345,14 +346,7 @@ class Environment:
         Returns:
             Optional[NetworkDevice]: Matching network device when found; otherwise None.
         """
-        normalized_identifier = identifier.lower()
-
-        for device in self.network_devices:
-            interface_ips = {interface.ip for interface in device.interfaces}
-            if normalized_identifier == device.id or normalized_identifier in interface_ips:
-                return device
-
-        return None
+        return self._index().network_devices_by_identifier.get(identifier.lower())
 
     def get_firewall_rule(self, identifier: str) -> Optional[FirewallRule]:
         """
@@ -364,14 +358,7 @@ class Environment:
         Returns:
             Optional[FirewallRule]: Matching firewall rule when found; otherwise None.
         """
-        normalized_identifier = identifier.lower()
-
-        for device in self.network_devices:
-            for rule in device.policies:
-                if rule.id == normalized_identifier:
-                    return rule
-
-        return None
+        return self._index().firewall_rules_by_id.get(identifier.lower())
 
     def get_logging_profile(self, identifier: str) -> Optional[LoggingProfile]:
         """
@@ -383,13 +370,7 @@ class Environment:
         Returns:
             Optional[LoggingProfile]: Matching logging profile when found; otherwise None.
         """
-        normalized_identifier = identifier.lower()
-
-        for profile in self.logging_profiles:
-            if profile.id == normalized_identifier:
-                return profile
-
-        return None
+        return self._index().logging_profiles_by_id.get(identifier.lower())
 
     def get_dns_record(self, name: str, record_type: str = "A") -> Optional[DnsRecord]:
         """
@@ -402,14 +383,7 @@ class Environment:
         Returns:
             Optional[DnsRecord]: Matching DNS record when found; otherwise None.
         """
-        normalized_name = name.lower()
-        normalized_record_type = record_type.upper()
-
-        for record in self.dns_records:
-            if record.name == normalized_name and record.record_type == normalized_record_type:
-                return record
-
-        return None
+        return self._index().dns_records_by_key.get((name.lower(), record_type.upper()))
 
     def resolve_dns(self, name: str, record_type: str = "A") -> Optional[str]:
         """
@@ -446,13 +420,76 @@ class Environment:
         if service is None:
             return None
 
-        normalized_method = method.upper()
+        return self._index().http_routes_by_key.get((service.id, method.upper(), path))
+
+
+def build_environment_index(environment: Environment) -> EnvironmentIndex:
+    """
+    Build first-match lookup indexes for an environment.
+
+    Args:
+        environment (Environment): Environment to index.
+
+    Returns:
+        EnvironmentIndex: Precomputed environment lookup index.
+    """
+    hosts = []
+    zones_by_id = {}
+    hosts_by_identifier = {}
+    users_by_identifier = {}
+    services_by_identifier = {}
+    network_devices_by_identifier = {}
+    firewall_rules_by_id = {}
+    logging_profiles_by_id = {}
+    dns_records_by_key = {}
+    http_routes_by_key = {}
+
+    for zone in environment.zones:
+        zones_by_id.setdefault(zone.id.lower(), zone)
+        hosts.extend(zone.hosts)
+
+    for host in hosts:
+        for identifier in (host.id, host.hostname, host.fqdn, host.primary_ip):
+            hosts_by_identifier.setdefault(identifier.lower(), host)
+
+    for user in environment.users:
+        for identifier in (user.id, user.username):
+            users_by_identifier.setdefault(identifier.lower(), user)
+
+    for service in environment.services:
+        for identifier in (service.id, service.name, *service.names):
+            services_by_identifier.setdefault(identifier.lower(), service)
 
         for route in service.routes:
-            if route.method == normalized_method and route.path == path:
-                return route
+            http_routes_by_key.setdefault((service.id, route.method.upper(), route.path), route)
 
-        return None
+    for device in environment.network_devices:
+        network_devices_by_identifier.setdefault(device.id.lower(), device)
+
+        for interface in device.interfaces:
+            network_devices_by_identifier.setdefault(interface.ip.lower(), device)
+
+        for rule in device.policies:
+            firewall_rules_by_id.setdefault(rule.id.lower(), rule)
+
+    for profile in environment.logging_profiles:
+        logging_profiles_by_id.setdefault(profile.id.lower(), profile)
+
+    for record in environment.dns_records:
+        dns_records_by_key.setdefault((record.name.lower(), record.record_type.upper()), record)
+
+    return EnvironmentIndex(
+        hosts=tuple(hosts),
+        zones_by_id=zones_by_id,
+        hosts_by_identifier=hosts_by_identifier,
+        users_by_identifier=users_by_identifier,
+        services_by_identifier=services_by_identifier,
+        network_devices_by_identifier=network_devices_by_identifier,
+        firewall_rules_by_id=firewall_rules_by_id,
+        logging_profiles_by_id=logging_profiles_by_id,
+        dns_records_by_key=dns_records_by_key,
+        http_routes_by_key=http_routes_by_key,
+    )
 
 
 def load_environment_yaml(path: Path) -> Environment:

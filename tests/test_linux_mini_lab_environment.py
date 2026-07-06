@@ -4,7 +4,14 @@ Tests for the built-in linux-mini-lab environment fixture.
 
 import pytest
 
-from log_generator.core.environment import build_linux_mini_lab
+from log_generator.core.environment import (
+    Environment,
+    Host,
+    NetworkZone,
+    Service,
+    User,
+    build_linux_mini_lab,
+)
 
 
 def test_linux_mini_lab_identity_and_zones() -> None:
@@ -146,3 +153,116 @@ def test_required_lookup_helpers_raise_clear_errors() -> None:
 
     with pytest.raises(ValueError, match="unknown service 'missing-service'"):
         environment.require_service("missing-service")
+
+
+def test_environment_lookup_index_preserves_first_match_and_equality() -> None:
+    """
+    Verify lookup indexes preserve scan-order semantics and do not affect equality.
+
+    Returns:
+        None: This test asserts indexed lookup behavior directly.
+    """
+    first_host = Host(
+        id="host-first",
+        hostname="shared",
+        fqdn="shared.internal",
+        zone_id="zone-a",
+        primary_ip="10.0.0.1",
+        os="linux",
+        roles=(),
+        logging_profiles=(),
+    )
+    second_host = Host(
+        id="host-second",
+        hostname="shared",
+        fqdn="other.internal",
+        zone_id="zone-a",
+        primary_ip="10.0.0.2",
+        os="linux",
+        roles=(),
+        logging_profiles=(),
+    )
+    environment = Environment(
+        id="test-env",
+        version="1",
+        display_name="Test Environment",
+        domain="internal",
+        timezone="UTC",
+        environment_type="test",
+        zones=(
+            NetworkZone(
+                id="zone-a",
+                display_name="Zone A",
+                cidr=None,
+                zone_type="internal",
+                purpose="Testing",
+                hosts=(first_host, second_host),
+            ),
+        ),
+        users=(
+            User(
+                id="user-first",
+                username="shared-user",
+                display_name="First User",
+                account_type="human",
+                login_hosts=(),
+                normal_login_hosts=(),
+            ),
+            User(
+                id="user-second",
+                username="shared-user",
+                display_name="Second User",
+                account_type="human",
+                login_hosts=(),
+                normal_login_hosts=(),
+            ),
+        ),
+        groups=(),
+        services=(
+            Service(
+                id="svc-first",
+                name="Shared Service",
+                target_host_id="host-first",
+                port=80,
+                transport_protocol="tcp",
+                application_protocol="http",
+                names=("shared-service.internal",),
+                visibility=(),
+            ),
+            Service(
+                id="svc-second",
+                name="Shared Service",
+                target_host_id="host-second",
+                port=8080,
+                transport_protocol="tcp",
+                application_protocol="http",
+                names=("other-service.internal",),
+                visibility=(),
+            ),
+        ),
+        dns_records=(),
+        logging_profiles=(),
+        network_devices=(),
+        sensor_visibility=(),
+    )
+    equivalent_environment = Environment(
+        id=environment.id,
+        version=environment.version,
+        display_name=environment.display_name,
+        domain=environment.domain,
+        timezone=environment.timezone,
+        environment_type=environment.environment_type,
+        zones=environment.zones,
+        users=environment.users,
+        groups=environment.groups,
+        services=environment.services,
+        dns_records=environment.dns_records,
+        logging_profiles=environment.logging_profiles,
+        network_devices=environment.network_devices,
+        sensor_visibility=environment.sensor_visibility,
+    )
+
+    assert environment.get_host("shared").id == "host-first"
+    assert environment.get_user("shared-user").id == "user-first"
+    assert environment.get_service("Shared Service").id == "svc-first"
+    assert environment == equivalent_environment
