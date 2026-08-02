@@ -2,13 +2,13 @@
 
 ## Purpose
 
-Phase 3 adds the first source-specific output family: native-style Zeek TSV logs for the existing `linux-mini-lab`
-canonical web scenarios. The phase should turn already-expanded source-neutral events into plausible Zeek `conn.log`,
+Phase 3 added the first source-specific output family: native-style Zeek TSV logs for the existing `linux-mini-lab`
+canonical web scenarios. The phase turns already-expanded source-neutral events into plausible Zeek `conn.log`,
 `dns.log`, and `http.log` records while preserving the Phase 1 and Phase 2 generic normalized JSONL workflow.
 
 This plan follows the updated architecture roadmap in `docs/synthetic-log-generator-architecture.md`. Generic
-normalized JSONL, parser-friendly manifest writing, YAML loading, and CLI generation already exist, so Phase 3 should
-focus on the first source-specific generator rather than replanning implemented generic output work.
+normalized JSONL, parser-friendly manifest writing, YAML loading, and CLI generation already existed before Phase 3,
+so Phase 3 focused on the first source-specific generator rather than replanning implemented generic output work.
 
 ## Primary Inputs
 
@@ -50,28 +50,27 @@ Phase 3 excludes:
 
 ## Phase 3 Deliverables
 
-Expected files or modules:
+Implemented files or modules:
 
 - `src/log_generator/output/zeek.py`
 - `tests/test_zeek_output.py`
 - Updates to `src/log_generator/output/manifest.py`
 - Updates to `src/log_generator/scenario_yaml.py`
-- Updates to `src/log_generator/cli.py` only if CLI output-family behavior is currently too Phase-2-specific
+- Updates to `src/log_generator/cli.py` for output-family-aware generation
 - Zeek-enabled YAML fixture variants or targeted test fixtures
 - README usage notes for `output_families: [generic-normalized, zeek]`
 
-The exact module layout can follow the implementation, but Zeek-specific rendering should stay outside the core
-scenario and event modules. The source-neutral model should not learn Zeek field names. Shared flow facts that future
-firewall, proxy, Apache, or auditd generators may also need should be accepted from authors when provided and otherwise
-derived before source-specific writers run, not inside the first writer that happens to need them.
+Zeek-specific rendering stays outside the core scenario and event modules. The source-neutral model does not expose
+Zeek field names. Shared flow facts that future firewall, proxy, Apache, or auditd generators may also need are
+accepted from authors when provided and otherwise derived before source-specific writers run.
 
-## Recommended Implementation Order
+## Implemented Task Breakdown
 
 ### Task 1: Accept Zeek as a Supported Output Family
 
 Goal: let authors request Zeek output without weakening unsupported-family validation.
 
-Implement:
+Implemented:
 
 - Replace the Phase 2 rejection for `zeek` with an allow-list entry.
 - Keep `apache`, `auditd`, `firewall`, `proxy`, and custom families rejected with explicit unsupported messages.
@@ -89,7 +88,7 @@ Acceptance criteria:
 
 Goal: centralize Zeek stream schemas so record rendering, tests, and manifest entries share one source of truth.
 
-Implement:
+Implemented:
 
 - Field and type definitions for the MVP `conn`, `dns`, and `http` streams.
 - Native Zeek header rows: `#separator`, `#set_separator`, `#empty_field`, `#unset_field`, `#path`, `#open`,
@@ -107,25 +106,22 @@ Acceptance criteria:
 
 ### Task 3: Add Shared Detail Overrides, Enrichment, and Zeek Value Derivation
 
-Current readiness:
+Current status:
 
-- Ready to start now; no additional planning decisions block Task 3.
-- Task 1 is settled: YAML can request `zeek` and still rejects unsupported source-specific families.
-- Task 2 is settled: Zeek TSV schemas, headers, and value rendering exist for `conn`, `dns`, and `http`.
-- Initial deterministic Zeek-owned values already exist in the writer path, including source ports, UIDs, byte and
-  packet estimates, DNS details, HTTP defaults, status messages, and HTTP transaction depth.
-- The remaining Task 3 gap is authored source-neutral shared-detail overrides and their validation. Authors still need
-  a supported way to provide exact low-level values such as source ports, packet or byte counts, DNS transaction
-  details, HTTP user agents, HTTP versions, and response sizes.
+- Complete. YAML-authored source-neutral shared-detail overrides are supported and validated.
+- Authors can provide exact low-level values such as source ports, packet or byte counts, DNS transaction details, HTTP
+  user agents, HTTP versions, and response sizes.
+- Deterministic Zeek-owned values remain in the writer path, including UIDs, connection state, history, status
+  messages, and HTTP transaction depth.
 
 Goal: let authors provide low-level shared details when they need exact control, fill missing shared details
 deterministically, then generate Zeek-owned values without pushing Zeek-specific fields into source-neutral events.
 
-Implement:
+Implemented:
 
 - Add optional authored shared-detail fields for flow, DNS, and HTTP context. Keep these under source-neutral namespaces
   such as `network`, `dns`, or `http`, not a Zeek namespace.
-- Define the YAML shape for those details on supported authored events. The expected first pass should cover:
+- Define the YAML shape for those details on supported authored events. The supported shared-detail fields are:
 
 | Namespace | Fields |
 | --- | --- |
@@ -164,7 +160,7 @@ Acceptance criteria:
 Goal: convert expanded source-neutral events into Zeek stream records using existing event facts and environment
 visibility.
 
-Implement:
+Implemented:
 
 - DNS mapping from `dns_lookup` events to `dns.log` and a sibling UDP `conn.log` record.
 - HTTP mapping from `web_request` events to `http.log` and a sibling TCP `conn.log` record.
@@ -186,7 +182,7 @@ Acceptance criteria:
 
 Goal: write Zeek output into the existing source-first directory layout.
 
-Implement:
+Implemented:
 
 - `logs/zeek-sensor-01/zeek/conn.log`
 - `logs/zeek-sensor-01/zeek/dns.log`
@@ -206,7 +202,7 @@ Acceptance criteria:
 
 Goal: describe generated Zeek files without requiring consumers to inspect the payloads.
 
-Implement:
+Implemented:
 
 - File entries for each written Zeek stream.
 - `source_id: zeek-sensor-01`, `source_kind: sensor`, `log_family: zeek`, and `format: zeek-tsv`.
@@ -225,7 +221,7 @@ Acceptance criteria:
 
 Goal: keep the user-facing run path unchanged while honoring requested output families.
 
-Implement:
+Implemented:
 
 - Update the existing generation path to dispatch output writers from `Scenario.output_families`.
 - Ensure unsupported requested families fail before partial output is written.
@@ -243,7 +239,7 @@ Acceptance criteria:
 
 Goal: make source-specific output discoverable without promising broader log-family support.
 
-Implement:
+Implemented:
 
 - README example showing `output_families: [generic-normalized, zeek]`.
 - README output tree example including `conn.log`, `dns.log`, and `http.log`.
@@ -256,7 +252,7 @@ Acceptance criteria:
 - Documentation does not imply SIEM ingestion configuration is generated.
 - Documentation states that local login events do not produce Zeek network records.
 
-## Suggested Milestones
+## Implemented Milestones
 
 ### Milestone 1: Output-Family Gate and Zeek Rendering Primitives
 
@@ -313,11 +309,11 @@ Recommended exact assertions:
 - `linux_local_login` produces no Zeek rows.
 - Existing tests for generic output and Phase 2 YAML loading still pass.
 
-Repository checks after each implementation step:
+Repository checks for this checkout:
 
 ```bash
-python -m pytest
-flake8 --max-line-length=120 .
+.venv/bin/python -m pytest
+.venv/bin/flake8 --max-line-length=120 .
 ```
 
 ## Resolved Phase 3 Questions
@@ -377,7 +373,7 @@ family, only the `linux-mini-lab` environment is accepted by the Zeek writer, an
 
 ## Phase 3 Completion Criteria
 
-Phase 3 is complete when:
+Phase 3 is complete. The implemented criteria are:
 
 - YAML and Python scenarios can request `zeek`.
 - Zeek TSV `conn.log`, `dns.log`, and `http.log` are generated for canonical web scenarios.

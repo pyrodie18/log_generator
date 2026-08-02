@@ -111,3 +111,10 @@ Run tests and lint checks:
 python -m pytest
 flake8 --max-line-length=120 .
 ```
+
+In this workspace, the existing local virtualenv can run the same checks without activation:
+
+```bash
+.venv/bin/python -m pytest
+.venv/bin/flake8 --max-line-length=120 .
+```
