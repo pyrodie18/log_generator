@@ -1,0 +1,34 @@
+{
+  "name": "log_generator",
+  "image": "ghcr.io/pyrodie18/python-dev:2026.08.01.1@sha256:f9f58a7231d037ca519f987c7cb1d58de00083ffafbcc8c3ef52697b8fa15c95",
+  "remoteUser": "vscode",
+  "runArgs": [
+    "--security-opt",
+    "seccomp=unconfined"
+  ],
+  "containerEnv": {
+    "CODEX_HOME": "/home/vscode/.codex",
+    "SSH_AUTH_SOCK": "/tmp/codex-dev-ssh-agent.sock"
+  },
+  "initializeCommand": "${localEnv:HOME}/devel/dev-environments/scripts/ensure-ssh-agent && install -d -m 0700 -o 1000 -g 1000 ${localEnv:HOME}/.local/state/codex-dev/log_generator",
+  "mounts": [
+    "type=bind,source=${localEnv:HOME}/.local/state/codex-dev/log_generator,target=/home/vscode/.codex",
+    "type=bind,source=/run/codex-dev-ssh-agent-1000/agent.sock,target=/tmp/codex-dev-ssh-agent.sock",
+    "type=volume,source=log-generator-uv-cache,target=/home/vscode/.cache/uv"
+  ],
+  "postCreateCommand": "bootstrap-codex-home log_generator && uv sync --frozen --group dev",
+  "postStartCommand": "setup-codex-project log_generator",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.debugpy",
+        "openai.chatgpt"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venv/bin/python"
+      }
+    }
+  }
+}

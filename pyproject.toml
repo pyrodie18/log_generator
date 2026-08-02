@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools==80.9.0", "wheel==0.45.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -17,6 +17,12 @@ classifiers = [
 ]
 dependencies = [
     "PyYAML>=6.0",
+]
+
+[dependency-groups]
+dev = [
+    "flake8>=7.1.1",
+    "pytest>=8.3.2",
 ]
 
 [project.scripts]

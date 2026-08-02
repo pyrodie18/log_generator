@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.15"
+          enable-cache: true
+      - name: Install Python
+        run: uv python install ${{ matrix.python-version }}
+      - name: Verify lock
+        run: uv lock --check
+      - name: Sync environment
+        run: uv sync --frozen --group dev --python ${{ matrix.python-version }}
+      - name: Test
+        run: uv run --frozen --python ${{ matrix.python-version }} pytest
+      - name: Lint
+        run: uv run --frozen --python ${{ matrix.python-version }} flake8 src tests
+      - name: Build
+        if: matrix.python-version == '3.12'
+        run: uv build
