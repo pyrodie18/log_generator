@@ -557,6 +557,7 @@ def _build_expanded_web_request(
         http=authored_event.http,
         attack=authored_event.attack,
         metadata=metadata or None,
+        network=authored_event.network,
     )
 
 

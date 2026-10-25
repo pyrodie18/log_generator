@@ -179,9 +179,9 @@ Some fields are source-neutral because multiple source-specific generators must 
 provide these details for exact control. Concise scenarios may omit them and use deterministic defaults. The target
 architecture supplies those defaults through shared enrichment before source-specific generators run.
 
-Current implementation: `NetworkContext`, `DnsContext`, and `HttpContext` carry authored overrides on expanded events.
-Zeek derives omitted defaults and flow keys inside its writer; there is no shared enrichment pass yet. The precedence
-and ownership rules below describe the target for additional writers. NAT context is also future work.
+Current implementation: `NetworkContext`, `DnsContext`, and `HttpContext` carry authored overrides and deterministic
+defaults on expanded events. Shared enrichment runs before output writers, which consume the same context. NAT context
+is future work.
 
 Examples:
 
@@ -198,9 +198,8 @@ Precedence:
 2. Deterministic enrichment fills omitted shared details.
 3. Source-specific generators derive only source-native values that do not need cross-source agreement.
 
-Shared detail context may live directly on expanded events or in an immutable sidecar object linked by event ID,
-correlation ID, or flow ID. Source-specific generators should consume this context, not mutate the original event after
-the first generator notices a missing value.
+Shared detail context lives directly on expanded events after the deterministic enrichment pass. Output writers consume
+this context; they do not mutate events after discovering missing values.
 
 ### Generator-Owned Fields
 

@@ -264,10 +264,12 @@ Supported shared detail overrides:
 | `dns` | `trans_id`, `rtt`, `ttls`, `flags` | Transaction ID is an integer from 0 through 65535; RTT and TTLs are non-negative; flags accept boolean `AA`, `TC`, `RD`, and `RA`. |
 | `http` | `user_agent`, `version`, `response_body_len`, `response_content_type` | Text values are strings; response size is a non-negative integer. |
 
-Authored values take precedence over Zeek defaults. `http.user_agent` takes precedence over a `User-Agent` header.
-If expansion reuses an existing DNS lookup or connection, it retains that event's context rather than applying new
-overrides from the later request. Omitted defaults are derived inside the Zeek writer and are not added to generic
-JSONL. Shared enrichment for future writers remains follow-up work.
+Authored values take precedence over deterministic shared defaults. `http.user_agent` takes precedence over a
+`User-Agent` header.
+If expansion reuses an existing DNS lookup or connection, compatible `network` values from related requests are
+merged into the shared flow context; conflicting authored values for the same flow field are rejected. Per-request
+`http` values remain attached to each web request. Before output writers run, shared enrichment fills omitted network,
+DNS, and HTTP context values on expanded events. Generic JSONL and Zeek therefore serialize the same enriched details.
 
 ### `linux_local_login`
 

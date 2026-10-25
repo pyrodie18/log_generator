@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Iterator, Optional
 from uuid import uuid4
 
+from log_generator.core.enrichment import enrich_scenarios
 from log_generator.core.scenarios import Scenario
 from log_generator.output.jsonl import safe_output_path
 from log_generator.output.registry import (
@@ -61,8 +62,9 @@ def write_output_manifest(
     """
     output_root = Path(output_root)
     generated_at = _normalize_generated_at(generated_at)
+    _validate_requested_output_families(scenarios)
+    scenarios = enrich_scenarios(scenarios)
     writer_runs = plan_output_writer_runs(scenarios)
-    validate_output_writer_runs(writer_runs)
 
     _validate_replaceable_output_root(output_root)
 

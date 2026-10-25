@@ -52,8 +52,8 @@ the phase-specific planning documents as the more current implementation handoff
   planned as separate future phases.
 - Phase 3 is complete as the first source-specific generator: Zeek native-style TSV for `conn.log`, `dns.log`, and `http.log`.
   The detailed handoff is `docs/phase-3-planning.md`.
-- Authored shared contexts are implemented, but omitted flow, DNS, and HTTP defaults are still derived within the
-  Zeek writer. A shared source-neutral enrichment pass remains follow-up work before other writers need those defaults.
+- Authored shared contexts and deterministic network, DNS, and HTTP enrichment are implemented before output writers
+  run. Generic JSONL and Zeek consume the same enriched source-neutral events.
 - Apache, auditd, firewall, proxy, noise, richer attack sequencing, and stable plugin APIs remain future work after
   the Zeek path proves the first source-specific generator boundary.
 
@@ -344,8 +344,9 @@ The precedence should be:
 2. Deterministic source-neutral enrichment fills any omitted shared details.
 3. Source-specific generators derive only source-native fields that do not need cross-source agreement.
 
-This is the target ownership model. Phase 3 honors authored `network`, `dns`, and `http` contexts but derives omitted
-defaults in `log_generator.output.zeek`; it does not yet populate shared generated defaults on source-neutral events.
+Phase 3 implements this ownership model. The output manifest enriches expanded events before dispatching writers,
+populating omitted `network`, `dns`, and `http` context values on the source-neutral events. Zeek consumes those facts
+and continues to derive only Zeek-native values in `log_generator.output.zeek`.
 
 This lets a user plan every detail of a scenario when needed while keeping concise scenarios reproducible and sane by
 default. Shared details may live directly on expanded events or in immutable flow, DNS, or HTTP context linked to those
@@ -1084,8 +1085,8 @@ Major tasks:
 - Allow YAML and Python scenarios to request `zeek`.
 - Implement Zeek TSV schema definitions and header rendering.
 - Add author-overridable source-neutral flow, DNS, and HTTP contexts for client source ports, byte or packet counts,
-  DNS transaction details, HTTP user agents, HTTP versions, and response sizes. Omitted defaults and flow keys are
-  currently derived within the Zeek writer.
+  DNS transaction details, HTTP user agents, HTTP versions, and response sizes. Shared enrichment fills omitted values
+  before output writers run.
 - Implement deterministic Zeek-owned values such as `uid`, Zeek file IDs, Zeek connection state, Zeek history, and TSV
   rendering details.
 - Implement Zeek `conn.log`, `dns.log`, and `http.log` mapping from existing source-neutral events.
@@ -1126,8 +1127,7 @@ Major tasks:
   - Add auditd-style Linux local authentication records.
   - Add Apache access logs for `web-server-01`.
 - Add any required source-neutral hints only when a real generator needs them.
-- Extract shared default derivation from Zeek before an additional writer needs the same generated flow, DNS, or HTTP
-  facts, and test that those values agree across outputs.
+- Reuse shared flow, DNS, and HTTP enrichment in additional writers, and test that those values agree across outputs.
 - Add source-specific validators and golden fixtures for the chosen target.
 
 Deliverables:

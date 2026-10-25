@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+from log_generator.core.enrichment import enrich_scenarios
 from log_generator.core.events import SourceNeutralEvent
 from log_generator.core.scenarios import Scenario
 
@@ -30,6 +31,7 @@ def write_generic_normalized_events(output_root: Path, scenarios: tuple[Scenario
     Returns:
         Path: Path to the written generic normalized JSON Lines file.
     """
+    scenarios = enrich_scenarios(scenarios)
     events_path = safe_output_path(output_root, GENERIC_NORMALIZED_EVENTS_PATH)
     events_path.parent.mkdir(parents=True, exist_ok=True)
 

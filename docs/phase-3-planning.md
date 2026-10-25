@@ -29,7 +29,7 @@ Phase 3 includes:
 - Generation of `conn.log`, `dns.log`, and `http.log` for traffic visible to `zeek-sensor-01`.
 - Author-overridable source-neutral context for flow, DNS, and HTTP facts such as client source ports, byte or packet
   counts, DNS transaction context, HTTP user agents, HTTP versions, and response sizes.
-- Deterministic Zeek defaults for omitted context values and writer-local flow keys.
+- Deterministic source-neutral defaults for omitted shared context values, plus Zeek-owned values and rendering.
 - Deterministic Zeek-owned values such as `uid`, Zeek file IDs, Zeek connection state, Zeek history, and TSV rendering
   details.
 - Manifest file entries for generated Zeek files.
@@ -61,13 +61,15 @@ Implemented files or modules:
 - README usage notes for `output_families: [generic-normalized, zeek]`
 
 Zeek-specific rendering stays outside the core scenario and event modules. The source-neutral model does not expose
-Zeek field names. Shared flow facts that future firewall, proxy, Apache, or auditd generators may also need are
-accepted from authors when provided. Defaults for omitted details are currently derived inside the Zeek writer.
-A shared source-neutral enrichment layer remains future work before additional writers need the same defaults.
+Zeek field names. Shared flow, DNS, and HTTP facts are authored or deterministically enriched before output writers
+run, so generic JSONL and Zeek consume the same values. Zeek-specific IDs, connection state, history, and TSV
+rendering remain in the Zeek writer.
 
-## Implemented Task Breakdown
+## Task Completion Status
 
 ### Task 1: Accept Zeek as a Supported Output Family
+
+Status: complete.
 
 Goal: let authors request Zeek output without weakening unsupported-family validation.
 
@@ -86,6 +88,8 @@ Acceptance criteria:
 - Existing Phase 2 canonical YAML tests continue to pass.
 
 ### Task 2: Define Zeek TSV Schemas and Header Rendering
+
+Status: complete.
 
 Goal: centralize Zeek stream schemas so record rendering, tests, and manifest entries share one source of truth.
 
@@ -107,11 +111,11 @@ Acceptance criteria:
 
 ### Task 3: Add Shared Detail Overrides, Enrichment, and Zeek Value Derivation
 
-Current status:
+Status: complete.
 
-- Complete. YAML-authored source-neutral shared-detail overrides are supported and validated.
-- Authors can provide exact low-level values such as source ports, packet or byte counts, DNS transaction details, HTTP
-  user agents, HTTP versions, and response sizes.
+- YAML-authored source-neutral shared-detail overrides are supported and validated.
+- Omitted network, DNS, and HTTP context values are deterministically enriched on expanded source-neutral events
+  before output writers run.
 - Deterministic Zeek-owned values remain in the writer path, including UIDs, connection state, history, status
   messages, and HTTP transaction depth.
 
@@ -133,12 +137,12 @@ Implemented:
 - Add source-neutral model fields to carry those shared details after YAML parsing and event expansion.
 - Add validation that authored shared details are plausible, for example source ports are in range and packet or byte
   counts are non-negative.
-- Apply precedence rules where authored shared details win and deterministic Zeek defaults fill omitted details.
-- Use deterministic writer-local flow keys for DNS and HTTP flows.
+- Apply precedence rules where authored shared details win and deterministic shared enrichment fills omitted details.
+- Use deterministic logical flow keys during enrichment and retain Zeek-specific UIDs in the Zeek writer.
 - Preserve stable client source port derivation per flow when the author omits a port.
-- Honor authored byte or packet counts and derive omitted estimates in the Zeek writer.
-- Honor authored DNS transaction IDs, response intervals, answer TTLs, and flags, with deterministic writer defaults.
-- Honor authored HTTP user agent, HTTP version, response size, and MIME hints, with deterministic writer defaults.
+- Honor authored byte or packet counts and derive omitted estimates in source-neutral enrichment.
+- Honor authored DNS transaction IDs, response intervals, answer TTLs, and flags, with deterministic enrichment defaults.
+- Honor authored HTTP user agent, HTTP version, response size, and MIME hints, with deterministic enrichment defaults.
 - Keep Zeek-owned values such as `uid`, connection state, history, and TSV rendering details inside
   `log_generator.output.zeek`.
 - Keep Zeek HTTP transaction depth calculation for multiple requests sharing one connection.
@@ -151,13 +155,14 @@ Acceptance criteria:
 - Authored source port, byte count, packet count, DNS transaction, HTTP user-agent, or response-size values appear in
   Zeek output instead of generated defaults.
 - Zeek `conn.log`, `dns.log`, and `http.log` consume the same shared client source port for a flow.
-- Authored contexts can be consumed by future writers without depending on Zeek output objects. Extracting shared
-  default derivation from the Zeek writer remains a follow-up before multiple writers need matching generated values.
+- Shared authored and generated contexts can be consumed by future writers without depending on Zeek output objects.
 - The first misuse HTTP request has transaction depth `1`.
 - The second misuse HTTP request reuses the same HTTP connection `uid` and has transaction depth `2`.
 - DNS and HTTP records share the same `uid` as their underlying `conn.log` records.
 
 ### Task 4: Build Source-Neutral to Zeek Record Mapping
+
+Status: complete.
 
 Goal: convert expanded source-neutral events into Zeek stream records using existing event facts and environment
 visibility.
@@ -182,6 +187,8 @@ Acceptance criteria:
 
 ### Task 5: Write Zeek Files Under the Output Contract
 
+Status: complete.
+
 Goal: write Zeek output into the existing source-first directory layout.
 
 Implemented:
@@ -202,6 +209,8 @@ Acceptance criteria:
 
 ### Task 6: Extend Manifest Generation
 
+Status: complete.
+
 Goal: describe generated Zeek files without requiring consumers to inspect the payloads.
 
 Implemented:
@@ -221,6 +230,8 @@ Acceptance criteria:
 
 ### Task 7: Integrate Run API and CLI Output Selection
 
+Status: complete.
+
 Goal: keep the user-facing run path unchanged while honoring requested output families.
 
 Implemented:
@@ -239,6 +250,8 @@ Acceptance criteria:
 
 ### Task 8: Add Documentation and Examples
 
+Status: complete.
+
 Goal: make source-specific output discoverable without promising broader log-family support.
 
 Implemented:
@@ -254,9 +267,11 @@ Acceptance criteria:
 - Documentation does not imply SIEM ingestion configuration is generated.
 - Documentation states that local login events do not produce Zeek network records.
 
-## Implemented Milestones
+## Milestone Status
 
 ### Milestone 1: Output-Family Gate and Zeek Rendering Primitives
+
+Status: complete. Tasks 1, 2, and 3 are complete.
 
 Includes tasks 1 through 3.
 
@@ -268,15 +283,20 @@ Exit criteria:
 
 ### Milestone 2: Canonical Zeek Record Generation
 
+Status: complete.
+
 Includes tasks 4 and 5.
 
 Exit criteria:
 
 - Canonical source-neutral DNS and HTTP events produce Zeek `conn.log`, `dns.log`, and `http.log`.
 - Zeek output paths match the output contract.
-- Generic-only output behavior is unchanged.
+- Generic-only runs continue to write normalized JSONL at the same path; shared context defaults are now populated
+  there as well.
 
 ### Milestone 3: Manifest, CLI, and Documentation
+
+Status: complete.
 
 Includes tasks 6 through 8.
 
@@ -336,29 +356,26 @@ These decisions incorporate the answered Phase 3 planning questions:
 8. Reuse the same HTTP connection when multiple HTTP requests belong to the same scenario, source host, service,
    correlation, and destination. This is what gives the canonical misuse sequence transaction depths `1` and `2`
    on one shared Zeek connection UID.
-9. Keep authored flow facts source-neutral and prefer authored values. The current implementation fills omissions
-   inside the Zeek writer; moving that derivation into shared enrichment remains a follow-up for additional writers.
+9. Keep authored flow facts source-neutral and prefer authored values. Shared enrichment fills omissions before
+   output-family writers run, so generic JSONL and Zeek receive the same generated context.
 
 | Decision | Resolved Behavior | Reason |
 | --- | --- | --- |
 | Zeek format | Native TSV only | Matches Zeek defaults and avoids duplicating generic JSONL. |
 | Zeek version target | Core fields compatible with Zeek 8.2.x and 8.0.x LTS | Matches the schema notes and reduces field churn. |
-| `generic-normalized` with Zeek | Allow both; default remains generic-only | Keeps current behavior stable while enabling source-specific output explicitly. |
+| `generic-normalized` with Zeek | Allow both; default remains generic-only | Keeps family selection and output layout stable while enabling source-specific output explicitly. |
 | Zeek-only runs | Allow if `zeek` is the only requested family | Output families should describe what to write, not force generic output. |
 | Empty streams | Do not create files; record omitted streams when useful | Matches the output contract and avoids misleading empty logs. |
 | Header times | Derive from `generated_at` when available | Keeps test output reproducible. |
 | Sensor selection | Use `zeek-sensor-01` only | Keeps Phase 3 scoped to `linux-mini-lab`. |
 | HTTP connection reuse | Reuse connection by scenario, source host, service, correlation, and destination | Supports the canonical misuse two-request sequence. |
-| Shared flow facts | Authored values win; Zeek currently derives omitted defaults | Gives users exact control; shared enrichment is still needed before other writers reuse generated defaults. |
+| Shared flow facts | Authored values win; source-neutral enrichment fills omissions | Gives users exact control and keeps generated facts consistent across output families. |
 
 ## Current Implementation Status
 
-Phase 3 is implemented. The repository now covers output-family validation, Zeek TSV schemas and rendering primitives,
-source-neutral authored shared-detail overrides, deterministic Zeek record derivation, Zeek file writing, manifest
-entries, CLI dispatch, and README coverage for the Zeek workflow.
-
-Authored contexts are source-neutral, but omitted defaults and flow keys are still derived within
-`src/log_generator/output/zeek.py`. The originally planned shared enrichment layer is not implemented.
+The Phase 3 delivery is complete. Tasks 1 through 8 and Milestones 1 through 3 are complete. Task 3 adds a shared
+source-neutral enrichment pass in `src/log_generator/core/enrichment.py`; the output manifest applies it before
+dispatching writers, and direct Zeek record callers use the same pass.
 
 The implemented Phase 3 boundary remains intentionally narrow: only `zeek` is supported as a source-specific output
 family, only the `linux-mini-lab` environment is accepted by the Zeek writer, and only `conn.log`, `dns.log`, and
@@ -369,7 +386,7 @@ family, only the `linux-mini-lab` environment is accepted by the Zeek writer, an
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
 | Zeek fields leak into source-neutral events | Core model becomes source-specific | Keep all Zeek derivation in `log_generator.output.zeek`. |
-| Shared flow facts are generated inside Zeek | Later firewall or proxy generators disagree with Zeek records | Add a source-neutral enrichment step for ports, flow keys, and shared request facts before Zeek rendering. |
+| Shared flow facts drift between output families | Later writers disagree with generic JSONL and Zeek records | Keep enrichment before writer dispatch and reuse the enriched scenario in each writer. |
 | Authored low-level details are invalid | Generated logs become impossible or contradictory | Validate authored shared details before enrichment and fail with field-path errors. |
 | Generated `uid` relationships drift between streams | Zeek files become internally inconsistent | Test DNS and HTTP `uid` linkage against `conn.log`. |
 | Byte and packet counts look arbitrary | Output is less useful for analysts | Use deterministic, documented heuristics based on method, status, and route class. |
@@ -385,7 +402,8 @@ Phase 3 is complete. The implemented criteria are:
 - Zeek TSV `conn.log`, `dns.log`, and `http.log` are generated for canonical web scenarios.
 - Zeek records use deterministic headers, ordering, IDs, ports, durations, counts, DNS details, and HTTP details.
 - DNS and HTTP records share `uid` values with their underlying `conn.log` rows.
-- Manifest entries describe every generated Zeek file and preserve generic-only behavior.
+- Manifest entries describe every generated Zeek file; generic-only selection and output layout remain supported, with
+  shared contexts now populated on normalized events.
 - CLI generation works for generic-only and Zeek-enabled YAML scenarios.
 - README documents the Zeek workflow and current exclusions.
 - The full test suite passes.
@@ -398,5 +416,5 @@ unnecessarily. The most natural follow-up is either Zeek `files.log` and `ssl.lo
 generator for auditd and Apache, depending on whether the next canonical scenario emphasizes downloads, TLS web
 traffic, or host activity.
 
-Before another writer needs the same generated flow, DNS, or HTTP defaults, extract that derivation from the Zeek
-writer into shared source-neutral enrichment and add cross-source consistency tests.
+When adding another writer, reuse the enriched flow, DNS, and HTTP context and add cross-source consistency checks for
+the facts that writer renders.

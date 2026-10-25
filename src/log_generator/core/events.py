@@ -409,6 +409,7 @@ class WebRequestEvent(SourceNeutralEvent):
     http: Optional[HttpContext] = None
     metadata: Optional[dict[str, Any]] = None
     attack: Optional[dict[str, Any]] = None
+    network: Optional[NetworkContext] = None
 
     event_type: ClassVar[str] = "web_request"
 
@@ -428,6 +429,7 @@ class WebRequestEvent(SourceNeutralEvent):
             "request_headers": self.request_headers,
             "response_content_type": self.response_content_type,
             "http": self.http,
+            "network": self.network,
         }
 
 

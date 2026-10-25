@@ -6,10 +6,10 @@ This document records the Zeek schema research used by the first source-specific
 `linux-mini-lab` environment and the canonical web browsing scenarios. Phase 3 implements the MVP `conn.log`,
 `dns.log`, and `http.log` output described here.
 
-The implemented schemas and default derivation live in `src/log_generator/output/zeek.py`. Authored details use the
-source-neutral `NetworkContext`, `DnsContext`, and `HttpContext` models. Zeek currently derives omitted defaults and
-flow keys locally; shared enrichment for additional writers remains future work. The tables below describe current
-field mappings unless a stream is explicitly deferred.
+The implemented schemas and rendering live in `src/log_generator/output/zeek.py`; deterministic shared defaults live
+in `src/log_generator/core/enrichment.py`. Authored and enriched details use the source-neutral `NetworkContext`,
+`DnsContext`, and `HttpContext` models. The output manifest enriches events before writers run, and the tables below
+describe current field mappings unless a stream is explicitly deferred.
 
 ## Authoritative References
 
@@ -117,20 +117,20 @@ Minimum field target:
 | `ts` | `network_connection.timestamp`, rendered as epoch seconds. |
 | `uid` | Generator-owned stable Zeek connection ID. |
 | `id.orig_h` | Source host IP from expanded `network_connection.source_ip`. |
-| `id.orig_p` | Authored `network.source_port`, otherwise a deterministic client port derived by the Zeek writer. |
+| `id.orig_p` | Enriched `network.source_port`, authored or deterministically derived before output writers run. |
 | `id.resp_h` | Destination IP from expanded `network_connection.destination_ip`. |
 | `id.resp_p` | Destination port from expanded `network_connection.destination_port`. |
 | `proto` | Transport protocol, such as `tcp` or `udp`. |
 | `service` | Confirmed application protocol, such as `http` or `dns`, when known. |
 | `duration` | Plausible interval derived by the Zeek writer; authored duration is not supported. |
-| `orig_bytes` | Authored `network.orig_bytes`, otherwise a deterministic writer estimate. |
-| `resp_bytes` | Authored `network.resp_bytes`, otherwise a deterministic writer estimate. |
+| `orig_bytes` | Enriched `network.orig_bytes`, authored or deterministically estimated before output writers run. |
+| `resp_bytes` | Enriched `network.resp_bytes`, authored or deterministically estimated before output writers run. |
 | `conn_state` | Generator-owned Zeek state, usually `SF` for successful complete TCP sessions. |
 | `local_orig` | Derived from `Site::local_nets` equivalent; `T` for lab-originated canonical traffic. |
 | `local_resp` | Derived from `Site::local_nets` equivalent; `T` for internal lab responders. |
 | `missed_bytes` | `0` for clean synthetic MVP traffic. |
 | `history` | Generator-owned plausible packet history, such as a clean TCP handshake and close sequence. |
-| `orig_pkts` / `resp_pkts` | Authored network packet counts, otherwise deterministic writer estimates. |
+| `orig_pkts` / `resp_pkts` | Enriched network packet counts, authored or deterministically estimated before output writers run. |
 | `orig_ip_bytes` / `resp_ip_bytes` | Derived from payload byte counts plus packet counts and estimated IP header sizes. |
 | `tunnel_parents` | `-` unless a later tunnel event type exists. |
 | `ip_proto` | Numeric IP protocol, such as `6` for TCP and `17` for UDP. |
@@ -140,9 +140,8 @@ Implementation notes:
 - A single source-neutral `network_connection` should produce at most one `conn.log` record for a sensor.
 - A `dns_lookup` that produces `dns.log` must also produce the underlying UDP `conn.log` record for that DNS flow.
 - Zeek `uid`, `conn_state`, and `history` are Zeek-generator fields.
-- Client source ports and byte or packet counts use authored shared context when provided. The Zeek writer currently
-  derives omitted values and flow keys. Extract those defaults into shared enrichment before future firewall or proxy
-  generators need to agree with them.
+- Client source ports and byte or packet counts use enriched shared context. The Zeek writer consumes these values and
+  derives Zeek-specific IDs and record fields.
 - The source-neutral model should not require any Zeek `conn.log` field beyond the existing network event facts.
 
 ## `dns.log` Minimum Field Set
@@ -157,27 +156,27 @@ Minimum field target:
 | `ts` | `dns_lookup.timestamp`, rendered as epoch seconds. |
 | `uid` | Zeek connection ID for the DNS flow. |
 | `id.orig_h` | Source host IP. |
-| `id.orig_p` | Authored DNS event `network.source_port` in Python, otherwise a deterministic writer-derived port. |
+| `id.orig_p` | Enriched DNS event `network.source_port`, authored or deterministically derived before output writers run. |
 | `id.resp_h` | Resolver IP, `10.10.20.53` for `lab-dns-01`. |
 | `id.resp_p` | Resolver port, `53`. |
 | `proto` | `udp` for the MVP DNS service. |
-| `trans_id` | Authored `dns.trans_id`, otherwise a deterministic writer-derived 16-bit transaction ID. |
-| `rtt` | Authored `dns.rtt`, otherwise the writer default of `0.025` seconds. |
+| `trans_id` | Enriched `dns.trans_id`, authored or deterministically derived as a 16-bit transaction ID. |
+| `rtt` | Enriched `dns.rtt`, authored or defaulted to `0.025` seconds. |
 | `query` | `dns_lookup.query_name`. |
 | `qclass` / `qclass_name` | `1` / `C_IN` for ordinary internet-class queries. |
 | `qtype` / `qtype_name` | DNS type number and name, such as `1` / `A`. |
 | `rcode` / `rcode_name` | `0` / `NOERROR` for successful canonical lookups. |
-| `AA`, `TC`, `RD`, `RA`, `Z` | Authored `dns.flags` for the first four flags, otherwise writer defaults; `Z` is always `0`. |
+| `AA`, `TC`, `RD`, `RA`, `Z` | Enriched `dns.flags` for the first four flags; `Z` is always `0`. |
 | `answers` | `dns_lookup.resolved_addresses` for successful responses. |
-| `TTLs` | Authored `dns.ttls`, otherwise `300` seconds per answer. |
+| `TTLs` | Enriched `dns.ttls`, authored or defaulted to `300` seconds per answer. |
 | `rejected` | `F` for successful canonical lookups. |
 
 Implementation notes:
 
 - Failed lookups should populate `rcode` and `rcode_name` consistently and leave successful answers unset.
 - The DNS `uid` must match the `uid` in the underlying UDP `conn.log` record.
-- DNS transaction IDs, RTTs, flags, source ports, and TTLs use authored shared context when provided and writer defaults
-  otherwise. A shared DNS or flow enrichment layer is still needed if future DNS server logs must reuse those defaults.
+- DNS transaction IDs, RTTs, flags, source ports, and TTLs use enriched shared context. Future DNS writers can consume
+  the same values.
 - Optional fields such as `auth`, `addl`, and `original_query` depend on policy scripts and should be omitted from
   the MVP target unless the generator explicitly models those scripts.
 
@@ -201,10 +200,10 @@ Minimum field target:
 | `host` | Service DNS name, such as `web-server-01.internal`. |
 | `uri` | `path` plus optional query string. |
 | `referrer` | Optional request header hint, otherwise unset. |
-| `version` | Authored `http.version`, otherwise `1.1`. |
-| `user_agent` | Authored `http.user_agent`, then the `User-Agent` request header, then the writer default. |
+| `version` | Enriched `http.version`, authored or defaulted to `1.1`. |
+| `user_agent` | Enriched `http.user_agent`, authored first, then the `User-Agent` request header, then the shared default. |
 | `request_body_len` | `0` for canonical `GET` requests. |
-| `response_body_len` | Authored `http.response_body_len`, then a metadata override, otherwise a writer estimate. |
+| `response_body_len` | Enriched `http.response_body_len`, authored first, then a metadata override or shared estimate. |
 | `status_code` | Expanded `web_request.status_code`. |
 | `status_msg` | Derived from `status_code`, such as `OK` for `200`. |
 | `tags` | Empty set unless a later scenario needs HTTP tags. |
@@ -218,8 +217,8 @@ Implementation notes:
   `trans_depth`.
 - The HTTP `uid` must match the `uid` in the underlying TCP `conn.log` record.
 - `trans_depth` and Zeek file IDs are Zeek-owned. Authored HTTP context is preferred for response size, version,
-  user agent, and MIME type. File names come from metadata or the request path. Omitted defaults are currently derived
-  in the writer and need shared enrichment before future Apache or proxy generators reuse them.
+  user agent, and MIME type. File names come from metadata or the request path. Shared enrichment supplies omitted
+  HTTP defaults for this and future writers.
 - Download classification remains source-neutral metadata on the `web_request`; it does not require a separate
   source-neutral `file_download` event.
 - HTTP entity fields such as `resp_fuids`, `resp_filenames`, and `resp_mime_types` are present only when Zeek's HTTP
@@ -290,10 +289,10 @@ required source-neutral event fields:
 - Optional policy-loaded columns such as VLAN, DNS authority/additional answers, HTTP header-name vectors, file hashes,
   extracted-file metadata, JA3/JA3S package fields, or site-specific enrichments.
 
-Shared source-neutral context should own values that multiple future generators need to agree on, such as client source
-ports, normalized flow keys, shared packet or byte estimates, DNS transaction context, HTTP versions, user agents, and
-response body lengths. This is the target ownership model: authored values already win, but the current Zeek writer
-still derives omitted defaults. Extracting that derivation into shared enrichment is follow-up work.
+Shared source-neutral context owns values that multiple generators need to agree on, such as client source ports,
+shared packet or byte estimates, DNS transaction context, HTTP versions, user agents, and response body lengths.
+Authored values win, and the deterministic enrichment pass supplies omitted values before writers run. Zeek continues
+to own its UIDs, connection state, history, transaction depth, and native TSV rendering.
 
 Source-neutral events should continue to own:
 
@@ -354,6 +353,6 @@ Phase 1 preserved the source-neutral information consumed by the implemented Pha
 - Download classification on the archive request.
 - Environment visibility rules for `zeek-sensor-01`.
 
-Phase 3 implements deterministic defaults, Zeek `uid`, epoch timestamp rendering, connection state, HTTP transaction
-depth, and TSV header output. Shared enrichment and the deferred `files.log` and `ssl.log` streams remain follow-up
-work; see `docs/phase-3-planning.md` for the Phase 4 handoff.
+Phase 3 implements shared deterministic defaults, Zeek `uid`, epoch timestamp rendering, connection state, HTTP
+transaction depth, and TSV header output. The deferred `files.log` and `ssl.log` streams remain follow-up work; see
+`docs/phase-3-planning.md` for the Phase 4 handoff.
