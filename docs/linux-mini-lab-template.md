@@ -6,6 +6,10 @@
 and Linux-only so early implementation work can focus on source-neutral modeling, deterministic event generation, and
 cross-source consistency before adding larger enterprise dependencies.
 
+The template is implemented in `environments/linux-mini-lab.yaml` and loaded by
+`src/log_generator/core/environment.py`. Through Phase 3, only the Zeek logging profile has a source-specific writer.
+Apache, auditd, and firewall profiles describe future coverage and do not emit files yet.
+
 The template should support the first canonical scenarios:
 
 - Benign internal web browsing from a Linux workstation to an internal Apache server.
@@ -167,7 +171,7 @@ firewall records can be generated from that derived path.
 | --- | --- | --- | --- | --- |
 | `boundary-fw-01` | firewall | `workstation-vlan` `10.10.10.1`; `server-vlan` `10.10.20.1`; `internet` `203.0.113.10` | `profile-firewall-traffic` | Routes and filters workstation, server, and external traffic. |
 
-Interfaces intentionally use only `zone` and `ip` fields in the structured template. Interface IDs are omitted because
+Interfaces intentionally use only `zone_id` and `ip` fields in the structured template. Interface IDs are omitted because
 the MVP only needs to resolve zone membership and device traversal for log generation.
 
 ### Firewall Policy Rules
@@ -238,32 +242,36 @@ output/
 The path identifies the generating source first, then the log family, then the stream. A human should be able to tell
 what produced each file without opening `manifest.json`.
 
-These paths are derived from host profile attachments. For example, `web-server-01` attaches
-`profile-apache-auditd`, which expands into `logs/web-server-01/apache/access.log`,
-`logs/web-server-01/apache/error.log`, and `logs/web-server-01/auditd/audit.log`.
-Network device paths follow the same source-first pattern. For example, `boundary-fw-01` attaches
-`profile-firewall-traffic`, which expands into `logs/boundary-fw-01/firewall/traffic.log`.
+The tree includes reserved paths for future writers as well as implemented Zeek output. Host profile attachments
+describe the intended paths: for example, `web-server-01` attaches `profile-apache-auditd`, reserving
+`logs/web-server-01/apache/access.log`, `logs/web-server-01/apache/error.log`, and
+`logs/web-server-01/auditd/audit.log`. The device profile `profile-firewall-traffic` similarly reserves
+`logs/boundary-fw-01/firewall/traffic.log`. Those profiles do not create files until their writers are implemented.
 
 The first implementation should not create empty files for configured streams with zero records. The manifest can
 record omitted streams if coverage visibility is useful.
 
 ## Environment Lookup Rules
 
-Implementations should provide lookup helpers for:
+The implemented `Environment` lookup helpers support:
 
 - Host ID, hostname, FQDN, and IP address.
 - User ID and username.
-- Service ID, service name, FQDN, IP, port, and protocol.
-- Network device ID, interface zone, and interface IP address.
-- Firewall policy rule ID and network device ID.
+- Service ID, display name, and configured service name or FQDN.
+- Network device ID and interface IP address.
+- Firewall policy rule ID.
 - HTTP service route by service ID, method, and path.
-- Logging profile ID and attached host or network device ID.
-- DNS name to record value.
-- Zone ID and CIDR when the zone has an enumerated CIDR.
+- Logging profile ID.
+- DNS name and record type to record value.
+- Zone ID.
 
 Lookup failures should produce validation errors that name the missing reference and the field where it appeared.
 
 ## Validation Rules
+
+These rules guide environment authoring and semantic validation. Current validators check event references, service
+facts, DNS answers, local account placement, and event ordering. Routing, NAT application, firewall policy enforcement,
+noise generation, and non-Zeek source output remain future work; the template data alone does not implement them.
 
 ### Host and Address Rules
 
@@ -304,7 +312,7 @@ Lookup failures should produce validation errors that name the missing reference
 - DNS lookups for known `*.internal` names should resolve to the values in the DNS records table.
 - DNS lookups for unknown internal names should return a negative result unless the scenario explicitly creates a
   temporary record.
-- Apache request events must target `svc-web-http`.
+- Web requests intended for future Apache output must target `svc-web-http`; there is no `apache_request` event type.
 - HTTP path defaults should be resolved from the target service's nested `routes` list.
 - SSH activity against `web-server-01` should target `svc-web-ssh`.
 
@@ -337,6 +345,9 @@ Lookup failures should produce validation errors that name the missing reference
 
 ## Canonical Scenario Support
 
+The paths below include planned host and firewall telemetry. Current runs produce source-neutral events and requested
+Zeek records; Apache, auditd, and firewall output remain unsupported.
+
 ### Benign Internal Web Browsing
 
 The environment supports this path:
@@ -348,289 +359,32 @@ The environment supports this path:
 5. `boundary-fw-01` allows the workstation-to-server DNS and HTTP flows through matching policy rules.
 6. `web-server-01` serves `GET /`.
 7. `zeek-sensor-01` can observe the DNS lookup and HTTP connection.
-8. `web-server-01` can generate an Apache access record.
-9. `boundary-fw-01` can generate firewall traffic records when the scenario requests the `firewall` output family.
+8. Future Apache output can record the request handled by `web-server-01`.
+9. Future firewall output can record the policy decisions at `boundary-fw-01`.
 
 ### Local Account Misuse and Suspicious Download
 
 The environment supports this path:
 
 1. A scenario marks `alice` account use on `linux-ws-01` as suspicious or attacker-controlled.
-2. `linux-ws-01` generates local authentication telemetry for the login.
+2. The source-neutral login event records the authentication attempt; auditd telemetry is a future output.
 3. `linux-ws-01` queries `lab-dns-01` for `web-server-01.internal`.
 4. `linux-ws-01` connects to `web-server-01` over HTTP.
 5. `boundary-fw-01` allows the workstation-to-server DNS and HTTP flows through matching policy rules.
 6. `web-server-01` serves `/admin`, denies `/login`, or serves `/admin/archive.tar.gz` depending on the scenario.
 7. `zeek-sensor-01` can observe the DNS and HTTP activity.
-8. `web-server-01` can generate Apache access records.
-9. `boundary-fw-01` can generate firewall traffic records when the scenario requests the `firewall` output family.
+8. Future Apache output can record requests handled by `web-server-01`.
+9. Future firewall output can record the policy decisions at `boundary-fw-01`.
 10. The scenario can write answer-key metadata identifying the suspicious use and download.
 
-## Proposed Structured Template
+## Structured Template
 
-The first implementation can represent this document as Python objects, YAML, JSON, or fixtures. The following
-structured shape is intended as a direct translation target. Hosts are nested under zones so a reader can inspect a
-zone and immediately see its host coverage and attached logging profiles.
+The implemented YAML in [environments/linux-mini-lab.yaml](../environments/linux-mini-lab.yaml) is the source of truth.
+The prose tables above summarize that file. Hosts are nested under zones, and services, DNS records, logging profiles,
+network devices, and sensor visibility use the field names consumed by `src/log_generator/core/environment.py`.
 
-The structured YAML is the intended source of truth. The prose tables above are summaries for review and should be
-derived from the structured representation once implementation begins.
-
-```yaml
-id: linux-mini-lab
-version: "0.1"
-display_name: Linux Mini Lab
-domain: internal
-timezone: UTC
-zones:
-  - id: workstation-vlan
-    cidr: 10.10.10.0/24
-    hosts:
-      - id: linux-ws-01
-        hostname: linux-ws-01
-        fqdn: linux-ws-01.internal
-        primary_ip: 10.10.10.11
-        os: ubuntu-linux
-        roles:
-          - workstation
-        logging_profiles:
-          - profile-auditd-only
-      - id: linux-ws-02
-        hostname: linux-ws-02
-        fqdn: linux-ws-02.internal
-        primary_ip: 10.10.10.12
-        os: ubuntu-linux
-        roles:
-          - workstation
-        logging_profiles:
-          - profile-auditd-only
-  - id: server-vlan
-    cidr: 10.10.20.0/24
-    hosts:
-      - id: web-server-01
-        hostname: web-server-01
-        fqdn: web-server-01.internal
-        primary_ip: 10.10.20.21
-        os: ubuntu-linux
-        roles:
-          - web-server
-        logging_profiles:
-          - profile-apache-auditd
-      - id: lab-dns-01
-        hostname: lab-dns-01
-        fqdn: lab-dns-01.internal
-        primary_ip: 10.10.20.53
-        os: ubuntu-linux
-        roles:
-          - dns-resolver
-        logging_profiles: []
-  - id: monitoring-vlan
-    cidr: 10.10.30.0/24
-    hosts:
-      - id: zeek-sensor-01
-        hostname: zeek-sensor-01
-        fqdn: zeek-sensor-01.internal
-        primary_ip: 10.10.30.31
-        os: zeek-sensor
-        roles:
-          - network-sensor
-        logging_profiles:
-          - profile-zeek-only
-  - id: internet
-    type: external
-    hosts: []
-network_devices:
-  - id: boundary-fw-01
-    type: firewall
-    interfaces:
-      - zone: workstation-vlan
-        ip: 10.10.10.1
-      - zone: server-vlan
-        ip: 10.10.20.1
-      - zone: internet
-        ip: 203.0.113.10
-    logging_profiles:
-      - profile-firewall-traffic
-    policies:
-      rules:
-        - id: allow-workstations-dns
-          source_zones:
-            - workstation-vlan
-          destination_zones:
-            - server-vlan
-          protocols:
-            - udp
-          destination_ports:
-            - 53
-          action: allow
-          logging: true
-        - id: allow-workstations-internal-web
-          source_zones:
-            - workstation-vlan
-          destination_zones:
-            - server-vlan
-          protocols:
-            - tcp
-          destination_ports:
-            - 80
-          action: allow
-          logging: true
-        - id: allow-workstations-external-web
-          source_zones:
-            - workstation-vlan
-          destination_zones:
-            - internet
-          protocols:
-            - tcp
-          destination_ports:
-            - 80
-            - 443
-          action: allow
-          logging: true
-          nat:
-            type: source_nat
-            translated_source_ip: 203.0.113.10
-        - id: deny-workstations-other
-          source_zones:
-            - workstation-vlan
-          destination_zones:
-            - any
-          protocols:
-            - any
-          destination_ports:
-            - any
-          action: deny
-          logging: true
-users:
-  - id: user-alice
-    username: alice
-    display_name: Alice Adams
-    account_type: local-user
-    login_hosts:
-      - linux-ws-01
-    normal_login_hosts:
-      - linux-ws-01
-  - id: user-bob
-    username: bob
-    display_name: Bob Brown
-    account_type: local-user
-    login_hosts:
-      - linux-ws-01
-    normal_login_hosts:
-      - linux-ws-01
-  - id: user-carol
-    username: carol
-    display_name: Carol Clark
-    account_type: local-user
-    login_hosts:
-      - linux-ws-02
-    normal_login_hosts:
-      - linux-ws-02
-  - id: user-www-data
-    username: www-data
-    display_name: Apache Runtime User
-    account_type: service-account
-    login_hosts:
-      - web-server-01
-    normal_login_hosts: []
-groups:
-  - id: group-workstation-users
-    name: workstation-users
-    members:
-      - user-alice
-      - user-bob
-      - user-carol
-  - id: group-web-runtime
-    name: web-runtime
-    members:
-      - user-www-data
-services:
-  - id: svc-web-http
-    target_host: web-server-01
-    port: 80
-    protocol: http
-    names:
-      - web-server-01.internal
-    routes:
-      - method: GET
-        path: /
-        default_status: 200
-        purpose: Homepage
-      - method: GET
-        path: /about
-        default_status: 200
-        purpose: Static informational page
-      - method: GET
-        path: /admin
-        default_status: 200
-        purpose: Administrative page
-      - method: GET
-        path: /login
-        default_status: 403
-        purpose: Denied login portal access attempt
-      - method: GET
-        path: /admin/archive.tar.gz
-        default_status: 200
-        purpose: Suspicious archive download
-      - method: GET
-        path: /missing
-        default_status: 404
-        purpose: Missing page
-  - id: svc-web-ssh
-    target_host: web-server-01
-    port: 22
-    protocol: ssh
-    names:
-      - web-server-01.internal
-  - id: svc-dns
-    target_host: lab-dns-01
-    port: 53
-    protocol: dns
-    names:
-      - lab-dns-01.internal
-dns_records:
-  - name: linux-ws-01.internal
-    type: A
-    value: 10.10.10.11
-  - name: linux-ws-02.internal
-    type: A
-    value: 10.10.10.12
-  - name: web-server-01.internal
-    type: A
-    value: 10.10.20.21
-  - name: zeek-sensor-01.internal
-    type: A
-    value: 10.10.30.31
-  - name: lab-dns-01.internal
-    type: A
-    value: 10.10.20.53
-logging_profiles:
-  - id: profile-zeek-only
-    families:
-      - name: zeek
-        streams:
-          - conn.log
-          - dns.log
-          - http.log
-  - id: profile-auditd-only
-    families:
-      - name: auditd
-        streams:
-          - audit.log
-  - id: profile-apache-auditd
-    families:
-      - name: apache
-        streams:
-          - access.log
-          - error.log
-      - name: auditd
-        streams:
-          - audit.log
-  - id: profile-firewall-traffic
-    families:
-      - name: firewall
-        streams:
-          - traffic.log
-```
+The former inline draft used older names such as `target_host`, `protocol`, and DNS `type`. Use the implemented
+`target_host_id`, `transport_protocol` / `application_protocol`, and `record_type` fields when editing the template.
 
 ## Phase 1 Translation Notes
 

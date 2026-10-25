@@ -1,5 +1,8 @@
 # Phase 1 Task Breakdown
 
+Status: complete for the current MVP. This document records the Phase 1 implementation scope. YAML authoring arrived
+in Phase 2 and Zeek output in Phase 3; see `docs/phase-3-planning.md` for the current handoff.
+
 ## Purpose
 
 This document turns the Phase 0 planning artifacts into an implementable Phase 1 task list. Phase 1 should prove the
@@ -55,7 +58,7 @@ Acceptance criteria:
 - New modules import cleanly.
 - Public classes and functions have docstrings that match the repository standard.
 - Existing package imports remain backward compatible.
-- `python -m pytest` and `flake8 --max-line-length=120 .` pass.
+- `uv run --frozen pytest` and `uv run --frozen flake8 src tests` pass.
 
 ### Task 2: Model `linux-mini-lab`
 
@@ -217,8 +220,8 @@ Acceptance criteria:
 
 - Tests assert exact IDs and timestamps from `docs/canonical-scenarios.md`.
 - Tests run without network access.
-- `python -m pytest` passes.
-- `flake8 --max-line-length=120 .` passes.
+- `uv run --frozen pytest` passes.
+- `uv run --frozen flake8 src tests` passes.
 
 ## Suggested Milestones
 
@@ -252,7 +255,7 @@ Exit criteria:
 
 ## Phase 1 Completion Criteria
 
-Phase 1 is complete when:
+Phase 1 is complete for the current MVP. Its completion criteria were:
 
 - Both canonical scenarios can be constructed without YAML parsing.
 - Expanded source-neutral events match the Phase 0 scenario documents.
@@ -260,4 +263,4 @@ Phase 1 is complete when:
 - Ground truth is emitted only for scenarios with answer-key records.
 - No source-specific Zeek, Apache, auditd, or firewall files are generated.
 - The full test suite passes.
-- `flake8 --max-line-length=120 .` passes.
+- `uv run --frozen flake8 src tests` passes.

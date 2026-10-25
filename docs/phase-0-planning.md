@@ -1,5 +1,9 @@
 # Phase 0 Planning
 
+Status: complete. This document records the original Phase 0 scope and decisions. Phases 1 through 3 are also
+implemented; see `docs/phase-3-planning.md` for the current handoff. Phase-specific exclusions below describe the
+original sequencing, not the current feature set.
+
 ## Purpose
 
 Phase 0 finalizes the minimum viable product boundary for the synthetic log generator before source-neutral core
@@ -368,8 +372,9 @@ Validation checks:
 Repository checks after doc updates:
 
 ```bash
-python -m pytest
-flake8 --max-line-length=120 .
+uv lock --check
+uv run --frozen pytest
+uv run --frozen flake8 src tests
 ```
 
 ## Risks and Mitigations
@@ -386,7 +391,7 @@ flake8 --max-line-length=120 .
 
 ## Phase 0 Exit Criteria
 
-Phase 0 is complete when:
+Phase 0 is complete. Its exit criteria were:
 
 - `docs/linux-mini-lab-template.md` exists and defines all MVP entities and source coverage.
 - `docs/canonical-scenarios.md` exists and defines two deterministic scenarios.

@@ -4,9 +4,11 @@
 
 This document defines the two deterministic MVP scenarios for the synthetic log generator. The scenarios are
 source-neutral first: they describe modeled activity, event lineage, correlation behavior, validation expectations, and
-future source-specific records without requiring Phase 1 to generate Zeek, Apache, auditd, or firewall logs.
+source-specific mappings without embedding source-native fields in the events.
 
 Both scenarios use the `linux-mini-lab` environment template and must reference only entities defined there.
+Python fixtures and the YAML files under `scenarios/canonical/` are implemented and tested. Those YAML files request
+generic normalized JSONL by default; add `zeek` to request the implemented Zeek streams as well.
 
 ## Common Scenario Rules
 
@@ -40,7 +42,7 @@ metadata.
 
 ### Common Event Envelope
 
-Each canonical event should eventually map to a common envelope with at least these fields:
+Each canonical event uses the common envelope with these fields:
 
 | Field | Requirement |
 | --- | --- |
@@ -59,21 +61,20 @@ Each canonical event should eventually map to a common envelope with at least th
 
 Future taxonomy work may add fields or rename the envelope, but these scenarios rely on this conceptual shape.
 
-### Future Record Ownership
+### Record Ownership
 
-Source-specific records are listed to guide later generators. Phase 1 should produce only source-neutral events and
-generic normalized JSON Lines unless a later phase expands the implementation boundary.
+Zeek and ground-truth output are implemented. Other source mappings below guide future generators.
 
-| Source | Owning Environment Entity | Future Streams |
-| --- | --- | --- |
-| Zeek | `zeek-sensor-01` | `dns.log`, `conn.log`, `http.log` |
-| Apache | `web-server-01` | `access.log` |
-| auditd | `linux-ws-01` | `audit.log` |
-| Firewall | `boundary-fw-01` | `traffic.log` |
-| Ground truth | Scenario writer | `metadata/ground-truth.jsonl` |
+| Source | Owning Environment Entity | Streams | Status |
+| --- | --- | --- | --- |
+| Zeek | `zeek-sensor-01` | `dns.log`, `conn.log`, `http.log` | Implemented when requested. |
+| Apache | `web-server-01` | `access.log` | Future. |
+| auditd | `linux-ws-01` | `audit.log` | Future. |
+| Firewall | `boundary-fw-01` | `traffic.log` | Future. |
+| Ground truth | Scenario writer | `metadata/ground-truth.jsonl` | Implemented when answer-key records exist. |
 
-Plugin-owned values such as Zeek `uid`, Apache byte counts, user agents, audit record serial numbers, and exact
-source-specific timestamp formats should not be stored as required source-neutral event fields.
+Generator-owned values such as Zeek `uid`, audit record serial numbers, and exact source-specific timestamp formats
+are not required source-neutral fields. Shared byte counts and user agents may be supplied as optional context.
 
 ### Web Request Download Classification
 
@@ -353,24 +354,25 @@ minimum answer-key content for this scenario is:
 | `supporting_event_ids` | `evt-misuse-web-001`, `evt-misuse-web-004` |
 | `description` | Suspicious local account use followed by admin page access and archive download. |
 
-## YAML Translation Targets
+## YAML Examples
 
-The later YAML schema should be able to express both scenarios without source-specific fields. These examples show the
-intended authoring shape, not a finalized schema. They show the high-level authored events. The expanded event
-sequence above shows the DNS and connection helper events that implementation tests can assert.
+These executable examples match the files under `scenarios/canonical/`. They show the high-level authored events;
+the expanded sequences above include the DNS and connection helpers asserted by the tests.
 
-### Benign Scenario Sketch
+### Benign Scenario
 
 ```yaml
 schema_version: scenario/v0.1
 id: scenario-benign-internal-web
 name: Benign Internal Web Browsing
+description: Alice visits the internal Apache homepage from her normal workstation.
 seed: 1001
 environment:
   id: linux-mini-lab
   version: "0.1"
 time_range:
   start: 2026-01-15T14:00:00Z
+  end: 2026-01-15T14:00:02Z
 output_families:
   - generic-normalized
 events:
@@ -385,18 +387,20 @@ events:
     correlation_id: corr-benign-internal-web-001
 ```
 
-### Misuse Scenario Sketch
+### Misuse Scenario
 
 ```yaml
 schema_version: scenario/v0.1
 id: scenario-local-account-misuse-web
 name: Local Account Misuse and Suspicious Web Access
+description: Suspicious use of Alice's local account followed by admin browsing and archive download.
 seed: 2002
 environment:
   id: linux-mini-lab
   version: "0.1"
 time_range:
   start: 2026-01-15T03:12:00Z
+  end: 2026-01-15T03:12:28Z
 output_families:
   - generic-normalized
 events:
@@ -435,17 +439,32 @@ events:
       technique_id: T1105
       technique_name: Ingress Tool Transfer
     correlation_id: corr-local-account-misuse-001
+attack_chain:
+  - id: step-admin-access
+    name: Admin page access
+    primary_event_id: evt-misuse-web-004
+    technique_id: T1087
+    technique_name: Account Discovery
+  - id: step-archive-download
+    name: Archive download
+    primary_event_id: evt-misuse-web-005
+    supporting_event_ids:
+      - evt-misuse-web-001
+      - evt-misuse-web-004
+    technique_id: T1105
+    technique_name: Ingress Tool Transfer
 answer_key:
   - label: suspicious_internal_web_download
     primary_event_id: evt-misuse-web-005
     supporting_event_ids:
       - evt-misuse-web-001
       - evt-misuse-web-004
+    description: Suspicious local account use followed by admin page access and archive download.
 ```
 
 ## Phase 1 Test Targets
 
-These scenarios should become exact source-neutral test fixtures in Phase 1.
+These scenarios are exact source-neutral test fixtures implemented in Phase 1, with YAML parity checks added in Phase 2.
 
 | Test Target | Expected Assertion |
 | --- | --- |
@@ -468,6 +487,6 @@ These scenarios should become exact source-neutral test fixtures in Phase 1.
 
 ## Open Decisions Carried Forward
 
-No scenario-level open decisions remain in this artifact. YAML loading is explicitly deferred to Phase 2 in
-`docs/phase-0-planning.md`; Phase 1 can use Python fixtures or in-memory scenario construction as long as the expanded
-events match these canonical scenarios.
+No scenario-level open decisions remain in this artifact. Python fixtures, YAML loading, and generic and Zeek output
+are implemented. Phase 4 still needs to select the next source-specific stream; see the handoff in
+`docs/phase-3-planning.md`.

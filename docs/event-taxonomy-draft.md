@@ -6,6 +6,11 @@ This document defines the first source-neutral event taxonomy for the synthetic 
 `linux-mini-lab` environment and the two canonical scenarios, so Phase 1 can implement event models without guessing
 which fields are core model data and which fields belong to later source-specific generators.
 
+The four scenario-required event types below are implemented in `src/log_generator/core/events.py`.
+YAML authors `web_request` and `linux_local_login`; Python also supports manual `dns_lookup` and
+`network_connection` events. Zeek output is implemented for DNS and HTTP activity. TLS and process events and other
+source-specific families remain design proposals.
+
 The taxonomy is intentionally small. Scenario authors describe meaningful activity once, and generators derive
 source-specific records from the event, the environment, and the target service.
 
@@ -55,8 +60,9 @@ Expansion can create helper events when the environment has enough information:
 - Firewall telemetry can be derived from generated or authored `network_connection` events when the computed path
   crosses a logged firewall policy rule.
 
-Authors may still create `dns_lookup` or `network_connection` events manually when the scenario needs precise low-level
-behavior, unusual timing, failed helper activity, or a direct test of those event types.
+Python authors may create `dns_lookup` or `network_connection` events manually when the scenario needs precise
+low-level behavior, unusual timing, failed helper activity, or a direct test of those event types. These are not
+supported authored YAML event types.
 
 ### Helper Event Timing
 
@@ -68,7 +74,8 @@ canonical default for a first HTTP request is:
 - The `web_request` at the authored timestamp.
 
 If the scenario already has a compatible connection in the same correlation, later `web_request` events may reuse it.
-Authors can override this default by explicitly authoring the helper events.
+Python authors can override this default by explicitly authoring the helper events. For the first YAML web request
+after a local login, DNS and connection helpers are placed three and two seconds before the request, respectively.
 
 ## Service and Host References
 
@@ -169,8 +176,12 @@ Examples:
 ### Shared Detail Context
 
 Some fields are source-neutral because multiple source-specific generators must agree on them. A scenario author may
-provide these details for exact control, but concise scenarios may omit them and let deterministic expansion or
-enrichment create sane defaults before source-specific generators run.
+provide these details for exact control. Concise scenarios may omit them and use deterministic defaults. The target
+architecture supplies those defaults through shared enrichment before source-specific generators run.
+
+Current implementation: `NetworkContext`, `DnsContext`, and `HttpContext` carry authored overrides on expanded events.
+Zeek derives omitted defaults and flow keys inside its writer; there is no shared enrichment pass yet. The precedence
+and ownership rules below describe the target for additional writers. NAT context is also future work.
 
 Examples:
 
@@ -200,7 +211,7 @@ Examples:
 - Zeek `uid`
 - Zeek connection state rendering
 - Apache source-native size rendering when it is not backed by shared HTTP response size
-- Apache combined-log user agent text
+- Apache combined-log escaping of a shared user agent
 - auditd serial numbers
 - Firewall policy names, rule numbers, action strings, and NAT renderings
 - source-native timestamp strings

@@ -9,6 +9,11 @@ The schema should let authors describe meaningful activity without embedding Zee
 SIEM-specific fields. Source-specific records are derived later from source-neutral events, the environment template,
 and generator configuration.
 
+This reference describes the implemented `scenario/v0.1` workflow through Phase 3. YAML accepts `web_request` and
+`linux_local_login` authored events. DNS and connection helpers are expanded automatically; manual helper events are
+available through Python. Supported output families are `generic-normalized` and `zeek`; later families and noise
+profiles are explicitly rejected.
+
 ## Design Goals
 
 - Keep common scenarios readable without requiring Python code.
@@ -24,8 +29,8 @@ and generator configuration.
   timestamp strings.
 - YAML should not become a general programming language.
 - YAML should not model SIEM routing, parser configuration, index names, dashboards, or pipeline settings.
-- YAML should not require authors to write helper DNS or connection events for normal web requests unless the scenario
-  specifically needs low-level control.
+- YAML should generate helper DNS and connection events for web requests. Authors can supply shared detail overrides;
+  manual helper events require Python.
 
 ## File Shape
 
@@ -46,7 +51,15 @@ time_range:
   end: 2026-01-15T14:05:00Z
 output_families:
   - generic-normalized
-events: []
+events:
+  - id: evt-example-web-003
+    type: web_request
+    at: +2s
+    actor: user-alice
+    source_host: linux-ws-01
+    service: svc-web-http
+    method: GET
+    path: /
 attack_chain: []
 answer_key: []
 metadata: {}
@@ -85,8 +98,8 @@ The short form is accepted for local sketches and maps to the current supported 
 environment: linux-mini-lab
 ```
 
-Validation should warn when the short form depends on an implicit version. It should fail when the environment ID is
-unknown.
+The short form resolves to the environment's current supported version without a warning. Unknown environment IDs and
+explicit unsupported versions are errors.
 
 ### `time_range`
 
@@ -108,17 +121,14 @@ output_families:
   - generic-normalized
 ```
 
-`generic-normalized` is always available because it is emitted from expanded source-neutral events. Source-specific
-families such as `zeek`, `apache`, `auditd`, and `firewall` are generated only when all of these are true:
+`generic-normalized` writes expanded source-neutral events. Phase 3 also supports `zeek`, which writes visible DNS
+and HTTP traffic as `conn.log`, `dns.log`, and `http.log` for `zeek-sensor-01` in `linux-mini-lab` version `0.1`.
+Use `[generic-normalized, zeek]` for both outputs or `[zeek]` for Zeek alone. Empty Zeek streams are omitted and
+recorded in the manifest.
 
-- The scenario requests the family in `output_families`.
-- The environment has a host, sensor, or network device with a matching `logging_profiles` family.
-- The event type, target service, and visibility rules support that family.
-
-For example, requesting `apache` does not create Apache output for every web request. The request must target a service
-hosted by an environment host with an Apache-capable logging profile, such as `svc-web-http` on `web-server-01`.
-Requesting `zeek` requires a sensor profile and visibility into the relevant traffic path.
-Requesting `firewall` requires a network device on the computed path with a logged matching policy rule.
+An explicit family list must be non-empty and must not contain duplicates. `apache`, `auditd`, `firewall`, `proxy`,
+and unknown families fail validation before output is written. Environment logging profiles describe planned coverage
+but do not provide writers for those families yet.
 
 ## Event Shape
 
@@ -143,7 +153,7 @@ events:
 
 | Field | Required | Type | Description |
 | --- | --- | --- | --- |
-| `id` | no | string | Stable authored event ID. Required for canonical MVP fixtures. |
+| `id` | yes | string | Stable, filesystem-safe authored event ID. |
 | `type` | yes | string | Source-neutral event type, such as `web_request`. |
 | `at` | conditional | timestamp or offset | Absolute timestamp or offset from scenario start. |
 | `after` | conditional | string | Event ID that this event depends on. |
@@ -235,13 +245,29 @@ Optional fields:
 | Field | Description |
 | --- | --- |
 | `status_code` | Overrides the service route default. |
-| `query_string` | Query string without the leading `?`. |
+| `query_string` | Known limitation: accepted by the parser but not currently propagated into expanded events or output. |
 | `headers` | Source-neutral request header hints. |
-| `metadata` | Labels such as download classification overrides. |
+| `network` | Shared details copied to a newly generated HTTP connection helper. |
+| `dns` | Shared details copied to a newly generated DNS helper. |
+| `http` | Shared details copied to the expanded web request. |
+| `metadata` | Scenario labels; download classification is derived from the request path. |
 | `attack` | Optional ATT&CK-style context. |
 
 Expansion should generate helper `dns_lookup` and `network_connection` events by default when the target service is an
 internal modeled service and no compatible helper events already exist in the same correlation.
+
+Supported shared detail overrides:
+
+| Namespace | Fields | Constraints |
+| --- | --- | --- |
+| `network` | `source_port`, `orig_bytes`, `resp_bytes`, `orig_pkts`, `resp_pkts` | Port is an integer from 0 through 65535; counts are non-negative integers. |
+| `dns` | `trans_id`, `rtt`, `ttls`, `flags` | Transaction ID is an integer from 0 through 65535; RTT and TTLs are non-negative; flags accept boolean `AA`, `TC`, `RD`, and `RA`. |
+| `http` | `user_agent`, `version`, `response_body_len`, `response_content_type` | Text values are strings; response size is a non-negative integer. |
+
+Authored values take precedence over Zeek defaults. `http.user_agent` takes precedence over a `User-Agent` header.
+If expansion reuses an existing DNS lookup or connection, it retains that event's context rather than applying new
+overrides from the later request. Omitted defaults are derived inside the Zeek writer and are not added to generic
+JSONL. Shared enrichment for future writers remains follow-up work.
 
 ### `linux_local_login`
 
@@ -275,23 +301,9 @@ Optional fields:
 
 ### Manual Helper Events
 
-Authors may explicitly create `dns_lookup` or `network_connection` events when the default expansion is not precise
-enough. This should be reserved for scenarios that need unusual failure behavior, direct IP traffic, specific timing,
-or validation tests.
-
-```yaml
-- id: evt-manual-dns-001
-  type: dns_lookup
-  at: +0s
-  actor: user-alice
-  source_host: linux-ws-01
-  service: svc-dns
-  query_name: web-server-01.internal
-  query_type: A
-  status: success
-```
-
-Manual helper events must use the same source-neutral fields documented in the event taxonomy.
+YAML rejects authored `dns_lookup` and `network_connection` event types. Use the Python `DnsLookupEvent` and
+`NetworkConnectionEvent` models when a scenario needs manual helpers, unusual failure behavior, direct IP traffic,
+or precise helper timing. Their source-neutral fields are documented in the event taxonomy.
 
 ## Correlation and Parentage
 
@@ -350,6 +362,7 @@ answer_key:
 ```
 
 Validation should fail when answer-key event references do not resolve to authored or expanded event IDs.
+Each answer-key record requires `label`, `primary_event_id`, and `description`; `supporting_event_ids` is optional.
 
 ## Canonical Scenario Examples
 
@@ -366,7 +379,7 @@ environment:
   version: "0.1"
 time_range:
   start: 2026-01-15T14:00:00Z
-  end: 2026-01-15T14:00:10Z
+  end: 2026-01-15T14:00:02Z
 output_families:
   - generic-normalized
 events:
@@ -389,9 +402,9 @@ Expected expansion:
 | generated helper | `network_connection` | `2026-01-15T14:00:01Z` | DNS helper |
 | `evt-benign-web-003` | `web_request` | `2026-01-15T14:00:02Z` | connection helper |
 
-The canonical expanded scenario uses fixed helper IDs in `docs/canonical-scenarios.md`. The YAML parser can either
-derive those exact IDs from a deterministic helper ID rule or allow a future helper override mechanism before Phase 1
-fixtures are finalized.
+The canonical expanded scenario uses the fixed helper IDs in `docs/canonical-scenarios.md`. The builder derives those
+IDs from numbered authored IDs when the preceding two numbers are available; otherwise it generates deterministic
+helper IDs from the scenario, seed, event type, and sequence.
 
 ### Local Account Misuse and Suspicious Web Access
 
@@ -406,7 +419,7 @@ environment:
   version: "0.1"
 time_range:
   start: 2026-01-15T03:12:00Z
-  end: 2026-01-15T03:13:00Z
+  end: 2026-01-15T03:12:28Z
 output_families:
   - generic-normalized
 events:
@@ -490,7 +503,8 @@ actionable reason.
 
 - Required top-level fields must exist.
 - `schema_version` must be supported.
-- `id`, event IDs, correlation IDs, and labels must be filesystem-safe identifiers.
+- Scenario IDs, event IDs, and explicit correlation IDs must be filesystem-safe identifiers. Answer-key labels must
+  be non-empty strings.
 - `events` must be non-empty for MVP scenarios.
 - Event IDs must be unique within a scenario.
 - Every event must include `at` or `after`.
@@ -512,7 +526,7 @@ actionable reason.
 
 ### Field Validation
 
-- Unknown top-level fields should produce warnings in early drafts and errors once the schema stabilizes.
+- Unknown top-level fields are errors.
 - Unknown event fields should be errors by default because typos can silently change generated activity.
 - `status` must be one of `success`, `failure`, `denied`, or `unknown`.
 - `status_code` must be an integer between 100 and 599.
@@ -580,10 +594,11 @@ noise_profiles:
 Until noise behavior is implemented, validators should reject `noise_profiles` with an explicit "not supported yet"
 message instead of silently ignoring it.
 
-## Phase 2 Handoff
+## Implemented Workflow
 
-YAML loading is deferred until Phase 2 so Phase 1 can prove the source-neutral core model first. When YAML
-implementation starts, it can begin with this subset:
+YAML loading was implemented in Phase 2 under `src/log_generator/scenario_yaml/`. The public helpers are
+`load_scenario_yaml`, `load_scenario_from_yaml`, and `generate_from_yaml`, with text-based equivalents for loading
+and building in memory. The implemented workflow is:
 
 - Parse one YAML document per file.
 - Support `schema_version`, `id`, `name`, `seed`, `environment`, `time_range`, `output_families`, `events`,
@@ -591,8 +606,12 @@ implementation starts, it can begin with this subset:
 - Support `web_request` and `linux_local_login` as authored event types.
 - Expand `web_request` into DNS and network helpers for `svc-web-http`.
 - Validate all environment references against `linux-mini-lab`.
-- Generate source-neutral events only; source-specific records remain deferred.
+- Generate generic normalized JSONL, Zeek TSV, or both according to `output_families`.
 - Keep helper ID generation deterministic enough for exact test assertions.
+
+Scenario-level `description`, `metadata`, and `attack_chain` are parsed and validated, but the expanded `Scenario`
+does not currently retain them. Event-level `metadata` and `attack` are retained; `answer_key` is written to ground
+truth metadata. Multi-document files, noise profiles, and additional output families remain unsupported.
 
 ## Decisions Incorporated
 

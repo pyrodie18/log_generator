@@ -1,5 +1,9 @@
 # Phase 2 Planning
 
+Status: complete for deterministic single-scenario YAML files. This document records the Phase 2 scope and decisions;
+source-specific exclusions below applied to that phase. Phase 3 subsequently added Zeek output. See
+`docs/phase-3-planning.md` for the current handoff.
+
 ## Purpose
 
 Phase 2 turns the Phase 1 source-neutral core into an author-facing scenario workflow. The main outcome is that a user
@@ -51,7 +55,7 @@ Phase 2 excludes:
 
 Expected files or modules:
 
-- `src/log_generator/scenario_yaml.py` or `src/log_generator/io/scenario_yaml.py`
+- `src/log_generator/scenario_yaml/` (the loader was subsequently split into a package)
 - `src/log_generator/cli.py`
 - `scenarios/canonical/benign-internal-web.yaml`
 - `scenarios/canonical/local-account-misuse-web.yaml`
@@ -99,7 +103,7 @@ Implement:
 Acceptance criteria:
 
 - Missing required top-level fields are reported with field paths.
-- Unknown top-level fields are rejected or explicitly warned according to the final Phase 2 decision.
+- Unknown top-level fields are rejected.
 - Unknown event fields are errors by default.
 - Duplicate event IDs are rejected.
 - Unsafe IDs are rejected using the output path component rules where applicable.
@@ -262,7 +266,7 @@ Implement:
 - Command form:
 
 ```bash
-log-generator generate --scenario scenarios/canonical/benign-internal-web.yaml --output output/benign
+uv run --frozen log-generator generate --scenario scenarios/canonical/benign-internal-web.yaml --output output/benign
 ```
 
 Recommended options:
@@ -271,7 +275,7 @@ Recommended options:
 - `--output`: required output directory.
 - `--run-id`: optional explicit run ID.
 - `--generated-at`: optional deterministic timestamp for tests and reproducible examples.
-- `--strict`: optional flag if warning behavior exists.
+- `--strict`: accepted as a reserved flag; it currently has no effect and validation errors are always strict.
 
 Acceptance criteria:
 
@@ -355,13 +359,14 @@ Recommended exact assertions:
 Repository checks after each implementation step:
 
 ```bash
-python -m pytest
-flake8 --max-line-length=120 .
+uv lock --check
+uv run --frozen pytest
+uv run --frozen flake8 src tests
 ```
 
-## Decisions to Make Before Implementation
+## Resolved Phase 2 Decisions
 
-| Decision | Recommended Default | Reason |
+| Decision | Implemented Phase 2 Behavior | Reason |
 | --- | --- | --- |
 | YAML library | `PyYAML` with safe loading | Small dependency and sufficient for the draft schema. |
 | Unknown top-level fields | Error in Phase 2 | Prevents typos from silently changing scenarios. |
@@ -371,7 +376,7 @@ flake8 --max-line-length=120 .
 | Helper IDs | Derive canonical IDs from deterministic inputs | Keeps fixture YAML concise and avoids exposing expansion internals. |
 | Omitted correlation IDs | Generate deterministic IDs | Improves author ergonomics without sacrificing reproducibility. |
 | `noise_profiles` | Reject with "not supported yet" | Prevents users from assuming noise was applied. |
-| Source-specific requested families | Reject or mark unsupported explicitly | Avoids silently producing only generic output when users asked for Zeek or Apache. |
+| Source-specific requested families | Reject explicitly in Phase 2; Phase 3 adds `zeek` | Avoids silently producing only generic output when users asked for Zeek or Apache. |
 
 ## Risks and Mitigations
 
@@ -386,7 +391,7 @@ flake8 --max-line-length=120 .
 
 ## Phase 2 Completion Criteria
 
-Phase 2 is complete when:
+Phase 2 is complete. Its completion criteria were:
 
 - The two canonical scenarios exist as YAML fixtures.
 - YAML loading validates schema structure, timestamps, dependencies, references, attack metadata, and answer-key
@@ -395,7 +400,7 @@ Phase 2 is complete when:
 - A Python API can load and generate output from YAML.
 - A CLI can generate the documented output tree from YAML.
 - The full test suite passes.
-- `flake8 --max-line-length=120 .` passes.
+- `uv run --frozen flake8 src tests` passes.
 
 ## Phase 3 Handoff
 

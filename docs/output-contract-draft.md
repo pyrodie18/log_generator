@@ -2,9 +2,9 @@
 
 ## Purpose
 
-This document defines the first parser-friendly output directory contract for the synthetic log generator. It is scoped
-to Phase 0 planning and should let Phase 1 implement a generic normalized JSON Lines writer without guessing path,
-manifest, metadata, or empty-file behavior.
+This document defines the parser-friendly output directory contract implemented through Phase 3: generic normalized
+JSON Lines, Zeek TSV, dataset manifests, scenario metadata, and optional ground truth. Reserved paths for future
+writers are identified separately below.
 
 The contract is intentionally SIEM-neutral. It describes generated files and their source systems, but it does not
 assign index names, sourcetypes, parser configuration, normalization pipelines, dashboards, or collector settings.
@@ -148,7 +148,7 @@ Minimum shape:
       "seed": 1001,
       "time_range": {
         "start": "2026-01-15T14:00:00Z",
-        "end": "2026-01-15T14:00:10Z"
+        "end": "2026-01-15T14:00:02Z"
       }
     }
   ],
@@ -227,28 +227,28 @@ should remain descriptive metadata, not SIEM routing instructions.
 The writer should not create empty log files for configured streams with zero records in the first implementation.
 Instead, the manifest can record skipped streams when the information helps humans understand coverage.
 
-Example:
+Current Zeek example:
 
 ```json
 {
-  "source_id": "web-server-01",
-  "source_kind": "host",
-  "log_family": "apache",
-  "log_stream": "error.log",
+  "source_id": "zeek-sensor-01",
+  "source_kind": "sensor",
+  "log_family": "zeek",
+  "log_stream": "http.log",
   "reason": "zero_records",
   "requested": true,
   "configured": true
 }
 ```
 
-Recommended omitted-stream reasons:
+The current writer reports `zero_records` for requested Zeek streams with no rows. Other reasons below are reserved
+for future writers; unsupported families currently raise validation errors rather than appearing as omissions.
 
-| Reason | Meaning |
-| --- | --- |
-| `zero_records` | The source and stream were configured, but no generated records targeted the stream. |
-| `family_not_requested` | The environment supports the stream, but the run did not request its family. |
-| `unsupported_generator` | The scenario requested the family, but the writer does not implement it yet. |
-| `visibility_not_applicable` | Environment visibility or routing rules did not produce records for the stream. |
+| Reason | Meaning | Status |
+| --- | --- | --- |
+| `zero_records` | The source and stream were configured, but no generated records targeted the stream. | Implemented. |
+| `family_not_requested` | The environment supports the stream, but the run did not request its family. | Reserved. |
+| `visibility_not_applicable` | Environment visibility or routing rules did not produce records for the stream. | Reserved. |
 
 `omitted_streams` should not become an error list. Validation and generation errors should be reported separately by
 the caller or a future run-status artifact.
@@ -294,8 +294,9 @@ Minimum record shape:
 }
 ```
 
-Ground-truth records may include ATT&CK technique IDs, technique names, severity labels, or training tags when the
-scenario provides them. Those fields remain metadata outputs and should not be required for benign scenarios.
+The current ground-truth writer emits the fields shown above. Additional ATT&CK technique IDs, technique names,
+severity labels, or training tags would require a future extension; event-level ATT&CK context currently remains on
+generic source-neutral events. Ground-truth records are not required for benign scenarios.
 
 ## Empty File Policy
 
@@ -305,7 +306,7 @@ created for a successful run.
 | File | Empty Behavior |
 | --- | --- |
 | `manifest.json` | Always created for a successful run. |
-| `logs/source-neutral-core/generic-normalized/events.jsonl` | Created when expanded source-neutral events exist. |
+| `logs/source-neutral-core/generic-normalized/events.jsonl` | Created when requested and expanded source-neutral events exist. |
 | Source-specific log files | Created only when generated records exist. |
 | `metadata/scenario-manifest.json` | Created when scenario metadata is available for a successful run. |
 | `metadata/ground-truth.jsonl` | Created only when answer-key records exist. |
@@ -410,7 +411,7 @@ output/
 
 ## Validation Targets
 
-Phase 1 tests should be able to assert:
+The implemented output tests assert these expectations for generic and Zeek output:
 
 - Every generated file appears in `manifest.json`.
 - Every manifest path uses filesystem-safe components and is relative to the output root.

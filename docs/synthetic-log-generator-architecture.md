@@ -50,12 +50,18 @@ the phase-specific planning documents as the more current implementation handoff
   canonical YAML fixtures, answer-key metadata, public generation helpers, and `log-generator generate`.
 - Generic normalized JSONL and the parser-friendly output tree are already implemented. They should no longer be
   planned as separate future phases.
-- Phase 3 is now the first source-specific generator: Zeek native-style TSV for `conn.log`, `dns.log`, and `http.log`.
+- Phase 3 is complete as the first source-specific generator: Zeek native-style TSV for `conn.log`, `dns.log`, and `http.log`.
   The detailed handoff is `docs/phase-3-planning.md`.
+- Authored shared contexts are implemented, but omitted flow, DNS, and HTTP defaults are still derived within the
+  Zeek writer. A shared source-neutral enrichment pass remains follow-up work before other writers need those defaults.
 - Apache, auditd, firewall, proxy, noise, richer attack sequencing, and stable plugin APIs remain future work after
   the Zeek path proves the first source-specific generator boundary.
 
 ## Recommended Architecture
+
+The abstractions, event fields, plugin interfaces, and package layout below describe the long-term design. They are
+not all implemented APIs. Use the status section above, the phase-specific handoff, and the YAML/output references
+for the current behavior.
 
 Use a layered architecture:
 
@@ -303,7 +309,7 @@ Recommended common fields:
 - `child_event_ids`: child events, if known.
 - `timestamp`: event start time.
 - `duration`: event duration.
-- `status`: success, failure, partial, denied, unknown.
+- `status`: success, failure, denied, unknown. A distinct partial outcome is a possible future extension.
 - `severity`: informational, low, medium, high, critical.
 - `actor`: person, process, account, or attacker identity responsible for the activity.
 - `user`: user account involved.
@@ -337,6 +343,9 @@ The precedence should be:
 1. Authored details win when a scenario provides them.
 2. Deterministic source-neutral enrichment fills any omitted shared details.
 3. Source-specific generators derive only source-native fields that do not need cross-source agreement.
+
+This is the target ownership model. Phase 3 honors authored `network`, `dns`, and `http` contexts but derives omitted
+defaults in `log_generator.output.zeek`; it does not yet populate shared generated defaults on source-neutral events.
 
 This lets a user plan every detail of a scenario when needed while keeping concise scenarios reproducible and sane by
 default. Shared details may live directly on expanded events or in immutable flow, DNS, or HTTP context linked to those
@@ -1074,9 +1083,9 @@ Major tasks:
 
 - Allow YAML and Python scenarios to request `zeek`.
 - Implement Zeek TSV schema definitions and header rendering.
-- Add author-overridable source-neutral enrichment for shared flow, DNS, and HTTP facts such as client source ports,
-  normalized flow keys, byte or packet estimates, DNS transaction context, HTTP user agents, HTTP versions, and
-  response sizes.
+- Add author-overridable source-neutral flow, DNS, and HTTP contexts for client source ports, byte or packet counts,
+  DNS transaction details, HTTP user agents, HTTP versions, and response sizes. Omitted defaults and flow keys are
+  currently derived within the Zeek writer.
 - Implement deterministic Zeek-owned values such as `uid`, Zeek file IDs, Zeek connection state, Zeek history, and TSV
   rendering details.
 - Implement Zeek `conn.log`, `dns.log`, and `http.log` mapping from existing source-neutral events.
@@ -1117,6 +1126,8 @@ Major tasks:
   - Add auditd-style Linux local authentication records.
   - Add Apache access logs for `web-server-01`.
 - Add any required source-neutral hints only when a real generator needs them.
+- Extract shared default derivation from Zeek before an additional writer needs the same generated flow, DNS, or HTTP
+  facts, and test that those values agree across outputs.
 - Add source-specific validators and golden fixtures for the chosen target.
 
 Deliverables:

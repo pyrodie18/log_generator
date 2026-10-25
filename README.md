@@ -10,16 +10,16 @@ The built-in canonical data lives in YAML files:
 
 ## YAML Scenario Generation
 
-Install the package in editable mode before using the command-line entry point:
+Set up the repository-local environment with uv before using the command-line entry point:
 
 ```bash
-python -m pip install -e .
+uv sync --frozen --group dev
 ```
 
 Generate the benign canonical scenario:
 
 ```bash
-log-generator generate \
+uv run --frozen log-generator generate \
   --scenario scenarios/canonical/benign-internal-web.yaml \
   --output output/benign
 ```
@@ -27,7 +27,7 @@ log-generator generate \
 Generate the local account misuse scenario, including ground-truth metadata:
 
 ```bash
-log-generator generate \
+uv run --frozen log-generator generate \
   --scenario scenarios/canonical/local-account-misuse-web.yaml \
   --output output/local-account-misuse
 ```
@@ -82,7 +82,7 @@ Use `--run-id` to set an explicit manifest run ID and `--generated-at` with a ti
 reproducible examples:
 
 ```bash
-log-generator generate \
+uv run --frozen log-generator generate \
   --scenario scenarios/canonical/benign-internal-web.yaml \
   --output output/benign \
   --run-id run-benign-example \
@@ -99,22 +99,40 @@ ingestion, parser configuration, collector setup, and dashboard configuration re
 
 ## Development
 
-Install the package in editable mode:
+Sync the locked runtime and development dependencies into `.venv/`:
 
 ```bash
-python -m pip install -e .
+uv sync --frozen --group dev
 ```
 
-Run tests and lint checks:
+Verify the lock, then run tests and lint checks:
 
 ```bash
-python -m pytest
-flake8 --max-line-length=120 .
+uv lock --check
+uv run --frozen pytest
+uv run --frozen flake8 src tests
 ```
 
-In this workspace, the existing local virtualenv can run the same checks without activation:
+Add dependencies with `uv add` (or `uv add --group dev` for development tools). Keep generated datasets under
+`output/`; they are ignored by Git.
+
+Build release artifacts and inspect their contents before publishing:
 
 ```bash
-.venv/bin/python -m pytest
-.venv/bin/flake8 --max-line-length=120 .
+uv build
+tar -tf dist/log_generator-*.tar.gz
+unzip -l dist/log_generator-*.whl
 ```
+
+CI runs the lock, tests, and lint checks on Python 3.9 and 3.12, and builds release artifacts on Python 3.12.
+
+## Project Status
+
+Phases 0 through 3 are complete. The current implementation supports generic normalized JSONL and Zeek TSV for
+`conn.log`, `dns.log`, and `http.log`. Phase 4 has not started; its scope still needs to be selected from Zeek
+download/TLS streams or Linux host logs.
+
+- [Architecture and roadmap](docs/synthetic-log-generator-architecture.md)
+- [Phase 3 implementation and Phase 4 handoff](docs/phase-3-planning.md#current-implementation-status)
+- [YAML scenario reference](docs/scenario-yaml-schema-draft.md)
+- [Output directory and manifest contract](docs/output-contract-draft.md)
