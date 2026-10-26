@@ -94,8 +94,9 @@ the scenario ID, field path, invalid value, and reason.
 
 Phase 3 Zeek output targets core Zeek 8.2.x-compatible TSV fields, kept compatible with Zeek 8.0.x LTS, for
 `conn.log`, `dns.log`, and `http.log` in the `linux-mini-lab` environment. Local host-only events, such as local Linux
-login activity, do not produce Zeek network records. Zeek `ssl.log`, `files.log`, Apache, auditd, firewall, proxy, SIEM
-ingestion, parser configuration, collector setup, and dashboard configuration remain future work.
+login activity, do not produce Zeek network records. Phase 4 plans to add Zeek `files.log`, `ssl.log`, and `x509.log`;
+Apache, auditd, firewall, and proxy remain later work. SIEM ingestion, parser configuration, collector setup, and
+dashboard configuration are not generated.
 
 ## Development
 
@@ -129,10 +130,11 @@ CI runs the lock, tests, and lint checks on Python 3.9 and 3.12, and builds rele
 ## Project Status
 
 Phases 0 through 3 are complete. The current implementation supports generic normalized JSONL and Zeek TSV for
-`conn.log`, `dns.log`, and `http.log`. Phase 4 has not started; its scope still needs to be selected from Zeek
-download/TLS streams or Linux host logs.
+`conn.log`, `dns.log`, and `http.log`. Phase 4 is planned, but has not started; it will add Zeek `files.log`, `ssl.log`,
+and `x509.log` support. See the [Phase 4 plan](docs/phase-4-planning.md).
 
 - [Architecture and roadmap](docs/synthetic-log-generator-architecture.md)
 - [Phase 3 implementation and Phase 4 handoff](docs/phase-3-planning.md#current-implementation-status)
+- [Detailed Phase 4 plan](docs/phase-4-planning.md)
 - [YAML scenario reference](docs/scenario-yaml-schema-draft.md)
 - [Output directory and manifest contract](docs/output-contract-draft.md)

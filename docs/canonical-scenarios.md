@@ -488,5 +488,5 @@ These scenarios are exact source-neutral test fixtures implemented in Phase 1, w
 ## Open Decisions Carried Forward
 
 No scenario-level open decisions remain in this artifact. Python fixtures, YAML loading, and generic and Zeek output
-are implemented. Phase 4 still needs to select the next source-specific stream; see the handoff in
-`docs/phase-3-planning.md`.
+are implemented. Phase 4 is planned to add Zeek `files.log`, `ssl.log`, and `x509.log`; see
+`docs/phase-4-planning.md` for the required download and TLS fixture work.

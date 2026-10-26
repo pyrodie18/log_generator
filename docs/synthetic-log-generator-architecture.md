@@ -672,7 +672,8 @@ Authentication model:
 
 Planned log families:
 
-- `zeek-sensor-01/zeek`: Zeek `conn.log`, `dns.log`, `http.log`, and TLS-related logs where applicable.
+- `zeek-sensor-01/zeek`: Zeek `conn.log`, `dns.log`, `http.log`, and, in planned Phase 4, `files.log`, `ssl.log`, and
+  `x509.log` when corresponding activity is modeled and visible.
 - `linux-ws-01/auditd`: Local Linux authentication and process-relevant audit records.
 - `linux-ws-02/auditd`: Local Linux authentication and process-relevant audit records.
 - `web-server-01/apache`: Apache access and error logs.
@@ -781,7 +782,9 @@ output/
         conn.log
         dns.log
         http.log
+        files.log
         ssl.log
+        x509.log
     linux-ws-01/
       auditd/
         audit.log
@@ -1111,39 +1114,40 @@ Acceptance criteria:
 
 - A canonical web scenario produces plausible Zeek DNS, connection, and HTTP records.
 - DNS and HTTP rows share `uid` values with their underlying `conn.log` rows.
-- Generic-only output remains unchanged.
+- Generic-only selection and output paths remain unchanged; normalized events now include enriched shared context.
 
-### Phase 4: Zeek Expansion or Linux Host Logs
+### Phase 4: Zeek File and TLS Certificate Logs
 
-Goal: broaden source-specific coverage after the first Zeek path proves the generator boundary.
+Goal: extend the Zeek output family with file-transfer, TLS-handshake, and X.509 certificate telemetry.
 
-Status: future.
+Status: planned; implementation has not started. See `docs/phase-4-planning.md`.
 
 Major tasks:
 
-- Choose the next target from observed scenario needs:
-  - Add Zeek `files.log` for HTTP downloads.
-  - Add Zeek `ssl.log` for HTTPS/TLS scenarios.
-  - Add auditd-style Linux local authentication records.
-  - Add Apache access logs for `web-server-01`.
-- Add any required source-neutral hints only when a real generator needs them.
-- Reuse shared flow, DNS, and HTTP enrichment in additional writers, and test that those values agree across outputs.
-- Add source-specific validators and golden fixtures for the chosen target.
+- Add Zeek `files.log` for modeled HTTP downloads and reuse the HTTP response FUID.
+- Implement source-neutral TLS and certificate contexts and a `tls_connection` event.
+- Add Zeek `ssl.log` with connection UID linkage and `x509.log` with certificate FUID linkage from SSL records.
+- Extend the `profile-zeek-only` streams, output schemas, manifests, YAML support, and canonical fixtures.
+- Preserve deterministic output and test linkage across all six Zeek streams.
 
 Deliverables:
 
-- One additional source-specific stream or tightly related stream group.
-- Cross-source consistency tests against existing generic and Zeek output.
+- Zeek `conn.log`, `dns.log`, `http.log`, `files.log`, `ssl.log`, and `x509.log` support.
+- A canonical download fixture and a TLS 1.2 fixture with modeled certificate-chain details.
+- Source-neutral TLS and certificate event/context definitions, with YAML and Python support.
+- Manifest, CLI, schema, and cross-stream linkage coverage.
 - Updated documentation and output contract examples.
 
 Risks:
 
 - Expanding too many families at once slows validation and testing.
-- Host-log requirements may expose missing source-neutral event context.
+- Passive TLS 1.3 traffic does not generally expose certificate messages; certificate records must be conditional on
+  modeled visibility.
+- Certificate IDs do not join to `conn.log` by UID; they join through the SSL certificate-chain references.
 
 Acceptance criteria:
 
-- The selected next stream produces stable, plausible records for a canonical scenario.
+- Download, TLS handshake, and certificate records produce stable, plausible records for canonical scenarios.
 - Existing Phase 3 Zeek behavior remains stable.
 
 ### Phase 5: Background Noise Generation
@@ -1344,6 +1348,6 @@ Phase 3 from `docs/phase-3-planning.md` is implemented: scenarios can request Ze
 `conn.log`, `dns.log`, and `http.log`, manifests describe generated and omitted Zeek streams, and README examples cover
 `output_families: [generic-normalized, zeek]`.
 
-The next source-specific phase should choose either Zeek `files.log`/`ssl.log` or Linux auditd/Apache based on the next
-canonical scenario need. That work should preserve the current Phase 3 boundary: source-specific family names other
-than `zeek` remain explicit unsupported errors until their writers exist.
+Phase 4 is planned to add Zeek `files.log`, `ssl.log`, and `x509.log` while keeping the Phase 3 output-family boundary.
+Source-specific family names other than `zeek` remain explicit unsupported errors until their writers exist. See
+`docs/phase-4-planning.md` for implementation order and acceptance criteria.

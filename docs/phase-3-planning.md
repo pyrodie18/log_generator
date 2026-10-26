@@ -39,7 +39,7 @@ Phase 3 includes:
 
 Phase 3 excludes:
 
-- `ssl.log`, `files.log`, Apache, auditd, firewall, proxy, router, Windows, Active Directory, and cloud logs.
+- `files.log`, `ssl.log`, `x509.log`, Apache, auditd, firewall, proxy, router, Windows, Active Directory, and cloud logs.
 - New source-neutral event types.
 - Batch generation across multiple YAML files.
 - SIEM parser, collector, index, sourcetype, dashboard, or pipeline configuration.
@@ -259,7 +259,7 @@ Implemented:
 - README example showing `output_families: [generic-normalized, zeek]`.
 - README output tree example including `conn.log`, `dns.log`, and `http.log`.
 - Notes that Zeek TSV targets core Zeek 8.2.x-compatible fields.
-- Notes that `ssl.log`, `files.log`, Apache, auditd, firewall, and proxy output remain future work.
+- Notes that `files.log`, `ssl.log`, `x509.log`, Apache, auditd, firewall, and proxy output remain future work.
 
 Acceptance criteria:
 
@@ -379,7 +379,8 @@ dispatching writers, and direct Zeek record callers use the same pass.
 
 The implemented Phase 3 boundary remains intentionally narrow: only `zeek` is supported as a source-specific output
 family, only the `linux-mini-lab` environment is accepted by the Zeek writer, and only `conn.log`, `dns.log`, and
-`http.log` are emitted. Apache, auditd, firewall, proxy, `ssl.log`, and `files.log` remain future work.
+`http.log` are emitted. The Phase 4 plan covers `files.log`, `ssl.log`, and `x509.log`; Apache, auditd, firewall, and
+proxy remain later work.
 
 ## Risks and Mitigations
 
@@ -411,10 +412,8 @@ Phase 3 is complete. The implemented criteria are:
 
 ## Phase 4 Handoff
 
-After Phase 3, the next phase should broaden source-specific coverage without changing the source-neutral event model
-unnecessarily. The most natural follow-up is either Zeek `files.log` and `ssl.log` support or the first Linux host log
-generator for auditd and Apache, depending on whether the next canonical scenario emphasizes downloads, TLS web
-traffic, or host activity.
+Phase 4 is planned to extend the Zeek writer with `files.log`, `ssl.log`, and `x509.log`. The detailed scope, dependency
+order, model work, milestones, and acceptance criteria are in `docs/phase-4-planning.md`.
 
-When adding another writer, reuse the enriched flow, DNS, and HTTP context and add cross-source consistency checks for
-the facts that writer renders.
+The phase keeps one Zeek output family and reuses Phase 3 flow, DNS, and HTTP context. Later phases can add other source
+families after these Zeek streams and their certificate linkages are covered.

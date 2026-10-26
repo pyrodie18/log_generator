@@ -20,7 +20,12 @@ Primary schema target:
 - `DNS::Info`: https://docs.zeek.org/en/current/scripts/base/protocols/dns/main.zeek.html
 - `HTTP::Info`: https://docs.zeek.org/en/current/scripts/base/protocols/http/main.zeek.html
 - `SSL::Info`: https://docs.zeek.org/en/current/scripts/base/protocols/ssl/main.zeek.html
+- SSL certificate/file linkage: https://docs.zeek.org/en/v8.2.0/scripts/base/protocols/ssl/files.zeek.html
 - `Files::Info`: https://docs.zeek.org/en/current/scripts/base/frameworks/files/main.zeek.html
+- `X509::Info`: https://docs.zeek.org/en/v8.2.0/scripts/base/files/x509/main.zeek.html
+- Zeek `files.log`: https://docs.zeek.org/en/v8.2.0/reference/logs/files.html
+- Zeek `ssl.log`: https://docs.zeek.org/en/v8.2.0/reference/logs/ssl.html
+- Zeek `x509.log`: https://docs.zeek.org/en/current/reference/logs/x509.html
 - Zeek log formats and JSON logging:
   https://docs.zeek.org/en/current/tutorial/logs.html#zeek-log-formats
 
@@ -47,13 +52,15 @@ MVP Zeek stream targets:
 | `http.log` | Implemented | `web_request` | Homepage, admin page, and archive requests. |
 | `ssl.log` | Deferred | `tls_connection` | Not used by current scenarios because `svc-web-http` is plain HTTP. |
 | `files.log` | Deferred | Download-classified `web_request` | Useful later for downloads, but not in `profile-zeek-only` yet. |
+| `x509.log` | Deferred | Certificate chain on `tls_connection` | Requires modeled and sensor-visible certificate details. |
 
-The Phase 3 Zeek generator does not emit `ssl.log` for the canonical scenarios. It should also avoid adding
-`files.log` until the environment logging profile and output contract explicitly include it in a later phase.
+Phase 3 does not emit `ssl.log`, `files.log`, or `x509.log`. Phase 4 plans to add them and extend the Zeek sensor
+profile and output contract.
 
-For the protocol streams targeted here, `conn.log` is not optional supporting telemetry. Zeek protocol records such as
-`dns.log`, `http.log`, `ssl.log`, and connection-scoped `files.log` must have an underlying `conn.log` record with the
-same Zeek `uid`.
+For the connection-scoped protocol streams, `conn.log` is not optional supporting telemetry. `dns.log`, `http.log`,
+`ssl.log`, and connection-scoped `files.log` must have an underlying `conn.log` record with the same Zeek `uid`.
+`x509.log` is certificate-scoped: its certificate ID/FUID is referenced by the corresponding SSL certificate-chain
+fields, and it does not carry the connection UID.
 
 ## Format Decision
 
@@ -224,11 +231,11 @@ Implementation notes:
 - HTTP entity fields such as `resp_fuids`, `resp_filenames`, and `resp_mime_types` are present only when Zeek's HTTP
   entity script is part of the modeled Zeek profile. They should be treated as optional.
 
-## Deferred `files.log` Notes
+## Planned Phase 4 `files.log` Notes
 
-`files.log` can represent downloaded response bodies more directly than `http.log`, but it should remain deferred
-until a scenario or profile explicitly requests it. Connection-scoped file records should share the HTTP connection
-`uid` and should not be emitted without the corresponding `conn.log` record.
+`files.log` represents file observations from network transfers; its presence does not claim that file content was
+extracted. Phase 4 plans to emit it for successful, download-classified HTTP responses. Connection-scoped file records
+share the HTTP connection `uid` and require the corresponding `conn.log` record.
 
 Useful later fields:
 
@@ -240,7 +247,7 @@ Useful later fields:
 | `id` | Connection four-tuple. |
 | `source` | `HTTP` for HTTP response bodies. |
 | `depth` | HTTP transaction depth. |
-| `mime_type` | Generator-owned or scenario-provided response MIME type. |
+| `mime_type` | Enriched `http.response_content_type`, or unset if not modeled. |
 | `filename` | Inferred from path or HTTP headers, such as `archive.tar.gz`. |
 | `is_orig` | `F` for server-to-client downloads. |
 | `seen_bytes` / `total_bytes` | Generator-owned file size values. |
@@ -249,11 +256,10 @@ Useful later fields:
 Hash and extraction fields such as `md5`, `sha1`, `sha256`, `extracted`, and `extracted_size` depend on extra Zeek
 scripts and should not be part of the first field target.
 
-## Deferred `ssl.log` Notes
+## Planned Phase 4 `ssl.log` Notes
 
-Zeek still uses the `SSL::Info` script namespace and `ssl.log` stream for TLS activity. This project can call the
-source-neutral event `tls_connection`, but the Zeek generator should emit `ssl.log` when modeling HTTPS or other TLS
-connections.
+Zeek uses the `SSL::Info` script namespace and `ssl.log` stream for TLS handshake activity. Phase 4 implements a
+source-neutral `tls_connection` event and emits `ssl.log` only when modeled TLS traffic is visible to the sensor.
 
 Useful later fields:
 
@@ -262,29 +268,38 @@ Useful later fields:
 | `ts` | TLS detection time, usually parent connection timestamp or TLS event timestamp. |
 | `uid` | Connection `uid` shared with `conn.log`. |
 | `id` | Connection four-tuple. |
-| `version` | `tls_connection.tls_version` or generator default. |
-| `cipher` | Generator-owned or scenario-provided cipher suite. |
-| `curve` | Generator-owned or scenario-provided elliptic curve. |
-| `server_name` | `tls_connection.server_name` or service DNS name. |
-| `resumed` | Generator-owned boolean. |
+| `version` | Authored or enriched TLS version; unset when not observed. |
+| `cipher` | Authored or enriched negotiated cipher suite; unset when not observed. |
+| `curve` | Authored or enriched negotiated elliptic curve; unset when not observed. |
+| `server_name` | Observed or authored SNI; unset when not available or visible. |
+| `resumed` | Authored or enriched resumption state. |
 | `last_alert` | Unset for clean handshakes. |
-| `next_protocol` | Generator-owned ALPN value, such as `http/1.1` or `h2`. |
-| `established` | `T` for successful TLS handshakes. |
+| `next_protocol` | Observed or authored ALPN value, such as `http/1.1` or `h2`; unset when not negotiated. |
+| `established` | Authored handshake outcome. |
 | `ssl_history` | Generator-owned handshake history string. |
 
-No canonical MVP scenario uses TLS, so these fields should not affect Phase 1 event models.
+Load the Zeek SSL/files integration needed to expose certificate-chain identifiers in `ssl.log`. Keep package-added
+fields and validation outputs such as JA3, OCSP, and certificate-verification results outside the first profile.
 
-When TLS is added, each `ssl.log` record must share the `uid` of the underlying TCP `conn.log` record.
+Each `ssl.log` record must share the `uid` of the underlying TCP `conn.log` record. Omit optional handshake facts that
+are absent; do not infer SNI from the target service. A TLS 1.3 record may have no observable certificate chain.
+
+## Planned Phase 4 `x509.log` Notes
+
+Phase 4 adds `x509.log` for certificates explicitly modeled on a `tls_connection` and visible to the passive sensor.
+For the first canonical certificate scenario, use TLS 1.2. Do not infer X.509 records from SNI, server names, or a
+TLS 1.3 version value. The `ssl.log` record carries the server/client certificate-chain identifiers; `x509.log`
+records carry certificate IDs and parsed metadata, not the flow UID. See `docs/phase-4-planning.md` for the proposed
+certificate context, deterministic IDs, and acceptance criteria.
 
 ## Generator-Owned Values
 
-These values must be generated by the Zeek generator or derived from environment visibility. They should not become
-required source-neutral event fields:
+These values are Zeek-specific and must be generated by the Zeek writer or derived from environment visibility. They
+should not become required source-neutral event fields:
 
-- Zeek `uid` and file `fuid`.
+- Zeek connection `uid` and file or certificate FUIDs.
 - Zeek `conn_state` and Zeek `history`.
-- HTTP transaction depth and Zeek file linkage fields.
-- TLS cipher details, ALPN, session-resumption flags, and `ssl_history`.
+- HTTP transaction depth and `ssl_history`.
 - Native Zeek timestamp formatting and TSV header rendering.
 - Optional policy-loaded columns such as VLAN, DNS authority/additional answers, HTTP header-name vectors, file hashes,
   extracted-file metadata, JA3/JA3S package fields, or site-specific enrichments.
@@ -302,6 +317,7 @@ Source-neutral events should continue to own:
 - Service references.
 - DNS query names, query types, and resolved addresses.
 - HTTP method, path, URL, status code, and download classification.
+- Authored or enriched TLS negotiation facts and modeled certificate metadata needed by multiple output families.
 
 ## Compatibility Notes
 
@@ -354,5 +370,5 @@ Phase 1 preserved the source-neutral information consumed by the implemented Pha
 - Environment visibility rules for `zeek-sensor-01`.
 
 Phase 3 implements shared deterministic defaults, Zeek `uid`, epoch timestamp rendering, connection state, HTTP
-transaction depth, and TSV header output. The deferred `files.log` and `ssl.log` streams remain follow-up work; see
-`docs/phase-3-planning.md` for the Phase 4 handoff.
+transaction depth, and TSV header output. Phase 4 plans to add `files.log`, `ssl.log`, and `x509.log`; see
+`docs/phase-4-planning.md` for the implementation handoff.
